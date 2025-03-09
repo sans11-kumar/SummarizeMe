@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Summarize Me</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <h1>Summarize Me</h1>
+    <div class="controls">
+      <button id="summarizeBtn">Summarize This Page</button>
+      <button id="settingsBtn">Settings</button>
+    </div>
+    
+    <div class="result-container" id="resultContainer">
+      <h2 id="pageTitle"></h2>
+      <div class="summary-container">
+        <h3>Summary</h3>
+        <div id="summaryContent" class="summary-content">
+          <p class="placeholder">Click "Summarize This Page" to generate a summary.</p>
+        </div>
+      </div>
+      
+      <!-- Chat interface -->
+      <div class="chat-container" id="chatContainer">
+        <h3>Ask a Question</h3>
+        <div id="chatMessages" class="chat-messages">
+          <!-- Chat messages will appear here -->
+        </div>
+        <div class="chat-input-container">
+          <textarea id="chatInput" class="chat-input" placeholder="Ask a question about this page..." disabled></textarea>
+          <button id="sendBtn" class="send-btn" disabled>Ask</button>
+        </div>
+      </div>
+    </div>
+    
+    <div class="loader" id="loader">
+      <div class="spinner"></div>
+      <p>Generating summary...</p>
+    </div>
+  </div>
+  
+  <script src="popup.js"></script>
+</body>
+</html> 
