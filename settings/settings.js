@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsForm.appendChild(statusMessage);
   
   // Encryption helpers
-  const encryptionKey = 'second-brain-extension-key';
+  const encryptionKey = 'summarize-me-extension-key';
   
   // Function to encrypt sensitive data
   async function encryptData(data) {
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },
@@ -128,7 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },

@@ -130,7 +130,7 @@ If the extension doesn't work properly, check the following:
 ## Project Structure
 
 ```
-second-brain/
+summarize-me/
 ├── manifest.json         # Extension configuration
 ├── README.md             # This file
 ├── background/           # Background service worker

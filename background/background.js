@@ -274,7 +274,7 @@ function getProviderName(provider, settings = {}) {
 // Decrypt API keys from storage
 async function decryptApiKeys(settings) {
   // Encryption helpers
-  const encryptionKey = 'second-brain-extension-key';
+  const encryptionKey = 'summarize-me-extension-key';
   
   async function decryptData(encryptedData) {
     if (!encryptedData) return '';
@@ -304,7 +304,7 @@ async function decryptApiKeys(settings) {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },
