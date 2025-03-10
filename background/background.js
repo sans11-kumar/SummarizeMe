@@ -1,223 +1,212 @@
-// Listen for messages from popup
-chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.action === 'summarize') {
-    const { title, content, url } = message.data;
+console.log('Background script loaded');
+
+importScripts('./rag/embedder-impl.js');  // This file should define the embedder
+
+// Create and manage worker
+let llmWorker = null;
+
+async function initializeLLMWorker() {
+  console.log('Starting LLM check');
+  console.log('Initializing worker');
+  try {
+    // Check if worker already exists
+    if (llmWorker) {
+      console.log('Worker already exists, reusing');
+      return;
+    }
     
-    // Create a unique ID for this summarization task
-    const taskId = Date.now().toString();
+    console.log('Creating new LLM worker');
     
-    // Immediately respond with a taskId to prevent popup from closing
-    sendResponse({ 
-      success: true, 
-      inProgress: true,
-      taskId: taskId
-    });
+    // Check local LLM status first
+    const localLlmStatus = await checkAndValidateLMStudio();
     
-    // Store active summarization task to prevent cancellation
-    chrome.storage.local.set({ 
-      activeSummarizationTask: {
-        taskId,
-        timestamp: Date.now(),
-        title,
-        url
-      }
-    });
+    // Store the status
+    chrome.storage.local.set({ localLlmStatus });
     
-    // Function to update progress
-    const updateProgress = (percentage, status) => {
-      chrome.runtime.sendMessage({
-        action: 'summarizationProgress',
-        data: {
-          taskId,
-          percentage,
-          status
-        }
+    // Create new worker with proper error handling
+    try {
+      llmWorker = new Worker(chrome.runtime.getURL('llm/llm_worker.js'), {
+        type: 'module' // This allows the worker to use ES modules
       });
-    };
+      
+      console.log('Worker created successfully');
+      
+      // Set up message handler
+      llmWorker.onmessage = function(event) {
+        const message = event.data;
+        console.log('Message from worker:', message);
+        
+        // Forward messages from worker back to extension
+        if (message.action === "summarization_result" || 
+            message.action === "summarization_error") {
+          chrome.runtime.sendMessage(message);
+        }
+      };
+      
+      // Add error handler
+      llmWorker.onerror = function(error) {
+        console.error('Worker error:', error);
+        chrome.storage.local.set({ 
+          localLlmStatus: { available: false, error: 'Worker error: ' + error.message } 
+        });
+      };
+      
+      // Send initial status to worker
+      llmWorker.postMessage({
+        action: "init",
+        localLlmStatus: localLlmStatus
+      });
+      
+      console.log('LLM Worker initialized successfully');
+    } catch (workerError) {
+      console.error('Failed to create worker:', workerError);
+      throw workerError;
+    }
+  } catch (error) {
+    console.error('Failed to initialize LLM Worker:', error);
     
-    // Start the summarization process
-    updateProgress(10, 'Preparing content...');
-    
-    // Get the user's preferred summarization method and settings
-    chrome.storage.sync.get([
-      'summarizerType', 
-      'encryptedGroqApiKey',
-      'groqModel',
-      'encryptedOpenaiApiKey',
-      'openaiModel',
-      'encryptedDeepseekApiKey',
-      'deepseekModel',
-      'customApiName',
-      'customApiEndpoint',
-      'encryptedCustomApiKey',
-      'customApiModel',
-      'customApiHeaders',
-      'localLlmUrl'
-    ], async (result) => {
-      try {
-        // Decrypt API keys
-        const apiKeys = await decryptApiKeys(result);
+    // Store error status
+    chrome.storage.local.set({ 
+      localLlmStatus: { available: false, error: error.message } 
+    });
+  }
+}
+
+// Initialize worker on startup
+initializeLLMWorker();
+
+// Update message listener to handle LLM status requests with the new validator
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'checkLocalLlm') {
+    // Use our comprehensive checker
+    checkAndValidateLMStudio().then(status => {
+      const formattedStatus = {
+        available: status.connected && status.modelLoaded,
+        models: status.models || [],
+        activeModel: status.activeModel || null,
+        error: status.error || null,
+        lastChecked: Date.now()
+      };
+      
+      // Store the status for future reference
+      chrome.storage.local.set({ localLlmStatus: formattedStatus });
+      
+      // Send response
+      sendResponse({status: formattedStatus});
+    });
+    return true; // Keep the message channel open for the async response
+  }
+  
+  if (message.action === 'summarize') {
+    try {
+      // Check if local LLM is available using the comprehensive checker
+      checkAndValidateLMStudio().then(status => {
+        // Format status appropriately
+        const formattedStatus = {
+          available: status.connected && status.modelLoaded,
+          models: status.models || [],
+          activeModel: status.activeModel || null,
+          error: status.error || null,
+          lastChecked: Date.now()
+        };
         
-        const summarizerType = result.summarizerType || 'local';
-        const localLlmUrl = result.localLlmUrl || 'http://localhost:1234/v1';
+        // Store the status
+        chrome.storage.local.set({ localLlmStatus: formattedStatus });
         
-        let summary;
-        let usedFallback = false;
-        let contentTruncated = false;
-        let provider = summarizerType;
-        
-        // Estimate tokens for progress reporting
-        const estimatedTokens = Math.ceil((title.length + content.length) / 4);
-        const isLikelyLarge = estimatedTokens > 4000;
-        
-        updateProgress(20, isLikelyLarge ? 'Truncating large content...' : 'Content prepared');
-        
-        try {
-          // Format the content based on token limits
-          const { formattedContent, isTruncated } = formatContentForProvider(title, content, summarizerType, result);
-          contentTruncated = isTruncated;
-          
-          // Use the selected provider
-          updateProgress(30, `Sending to ${getProviderName(summarizerType, result)}...`);
-          
-          switch (summarizerType) {
-            case 'local':
-              summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-              break;
-            case 'groq':
-              summary = await summarizeWithGroq(title, formattedContent, apiKeys.groqApiKey, result.groqModel);
-              break;
-            case 'openai':
-              summary = await summarizeWithOpenAI(title, formattedContent, apiKeys.openaiApiKey, result.openaiModel);
-              break;
-            case 'deepseek':
-              summary = await summarizeWithDeepseek(title, formattedContent, apiKeys.deepseekApiKey, result.deepseekModel);
-              break;
-            case 'custom':
-              summary = await summarizeWithCustom(
-                title, 
-                formattedContent, 
-                apiKeys.customApiKey, 
-                result.customApiEndpoint,
-                result.customApiModel,
-                result.customApiHeaders
-              );
-              break;
-            default:
-              // Fallback to local LLM if invalid type
-              summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-          }
-          
-          updateProgress(90, 'Finalizing summary...');
-        } catch (apiError) {
-          console.error(`${summarizerType} error, falling back to Local LLM:`, apiError);
-          updateProgress(40, `${getProviderName(summarizerType, result)} failed, trying Local LLM...`);
-          
-          // Fallback to Local LLM
-          try {
-            const { formattedContent } = formatContentForProvider(title, content, 'local');
-            summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-            usedFallback = true;
-            provider = 'local';
-            updateProgress(90, 'Finalizing summary...');
-          } catch (localError) {
-            // If local also fails, rethrow the original error
-            updateProgress(0, 'All summarization methods failed');
-            throw apiError;
-          }
+        // Send status to popup if it's not available
+        if (!formattedStatus.available) {
+          chrome.runtime.sendMessage({
+            action: 'localLlmStatus',
+            status: formattedStatus
+          });
+        }
+
+        // Check if worker exists, create if needed
+        if (!llmWorker) {
+          console.log('Worker not found, initializing...');
+          initializeLLMWorker().then(() => {
+            sendToWorker();
+          }).catch(workerError => {
+            console.error('Failed to initialize worker:', workerError);
+            sendResponse({status: "error", message: 'Failed to initialize worker: ' + workerError.message});
+          });
+        } else {
+          sendToWorker();
         }
         
-        // Save the summary and URL to history
-        saveToHistory(url, title, summary, provider);
-        updateProgress(100, 'Summary complete!');
-        
-        // Send the completed summary
-        chrome.runtime.sendMessage({
-          action: 'summarizationComplete',
-          data: { 
-            taskId,
-            success: true, 
-            summary,
-            usedFallback,
-            contentTruncated,
-            provider
-          }
+        function sendToWorker() {
+          // Include the settings in the message to worker
+          chrome.storage.sync.get(['summarizerType'], settings => {
+            console.log('Sending message to worker with settings:', settings);
+            try {
+              // Send message to worker
+              llmWorker.postMessage({
+                target: "llm_worker",
+                action: "summarize",
+                content: message.content,
+                settings: settings
+              });
+              
+              // Let the sender know we're processing
+              sendResponse({status: "processing"});
+            } catch (postError) {
+              console.error('Error posting to worker:', postError);
+              sendResponse({status: "error", message: 'Error communicating with worker: ' + postError.message});
+            }
+          });
+        }
+      }).catch(error => {
+        console.error('Error checking LLM status:', error);
+        sendResponse({status: "error", message: 'Failed to check LLM status: ' + error.message});
+      });
+    } catch (error) {
+      console.error('Error in summarize handler:', error);
+      sendResponse({status: "error", message: error.message});
+    }
+    return true; // Keep the message channel open for the async response
+  }
+  
+  if (message.action === 'testLocalLlm') {
+    const url = message.url;
+    
+    // Set a timeout to ensure we always respond
+    const timeoutPromise = new Promise((resolve) => {
+      setTimeout(() => {
+        resolve({
+          connected: false,
+          modelLoaded: false,
+          error: 'Connection test timed out after 10 seconds'
         });
-        
-        // Clear active task
-        chrome.storage.local.remove('activeSummarizationTask');
-      } catch (error) {
-        console.error('Summarization error:', error);
-        updateProgress(0, 'Summarization failed');
-        
-        // Send error notification
-        chrome.runtime.sendMessage({
-          action: 'summarizationComplete',
-          data: { 
-            taskId,
-            success: false, 
-            error: error.message
-          }
-        });
-        
-        // Clear active task
-        chrome.storage.local.remove('activeSummarizationTask');
-      }
+      }, 10000);
     });
     
-    // Return true because we're responding asynchronously
-    return true;
-  }
-  
-  // Handle chat questions
-  if (message.action === 'chat') {
-    const { question, context } = message.data;
-    
-    // Process in the background without blocking
-    processChat(question, context);
-    
-    // Return false since we're not using sendResponse
-    return false;
-  }
-  
-  // Validate API connection
-  if (message.action === 'validateApiConnection') {
-    const { provider, apiKey, model, endpoint, headers } = message.data;
-    
-    validateApiConnection(provider, apiKey, model, endpoint, headers)
-      .then(result => {
-        sendResponse(result);
+    // Race the actual test with the timeout
+    Promise.race([
+      checkAndValidateLMStudio(url),
+      timeoutPromise
+    ])
+    .then(status => {
+      console.log('Connection test completed with status:', status);
+      sendResponse({ status: status });
       })
       .catch(error => {
-        console.error(`API validation error (${provider}):`, error);
+      console.error('Error testing LM Studio connection:', error);
         sendResponse({ 
-          success: false, 
-          isValid: false, 
-          message: error.message 
+        status: { 
+          connected: false, 
+          modelLoaded: false, 
+          error: error.message || 'Unknown error occurred during connection test'
+        } 
         });
       });
     
-    // Return true to indicate we'll respond asynchronously
-    return true;
+    return true; // Keep the message channel open for the async response
   }
   
-  // Check for active summarization
-  if (message.action === 'checkActiveSummarization') {
-    chrome.storage.local.get(['activeSummarizationTask'], (result) => {
-      const task = result.activeSummarizationTask;
-      if (task && (Date.now() - task.timestamp) < 300000) { // 5 minute timeout
-        sendResponse({ hasActiveTask: true, task });
-      } else {
-        if (task) {
-          // Clear stale task
-          chrome.storage.local.remove('activeSummarizationTask');
-        }
-        sendResponse({ hasActiveTask: false });
-      }
-    });
     return true;
-  }
 });
+
+// Then create a separate worker or page for LLM processing
 
 // Format content based on provider's token limits
 function formatContentForProvider(title, content, provider, settings = {}) {
@@ -274,7 +263,7 @@ function getProviderName(provider, settings = {}) {
 // Decrypt API keys from storage
 async function decryptApiKeys(settings) {
   // Encryption helpers
-  const encryptionKey = 'second-brain-extension-key';
+  const encryptionKey = 'summarize-me-extension-key';
   
   async function decryptData(encryptedData) {
     if (!encryptedData) return '';
@@ -304,7 +293,7 @@ async function decryptApiKeys(settings) {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },
@@ -399,7 +388,7 @@ If you can't answer based on the summary, say so and suggest what information mi
           // Use the selected provider
           switch (summarizerType) {
             case 'local':
-              response = await chatWithLocalLlm(formattedHistory, localLlmUrl);
+              response = await chatWithLocalLlm(formattedHistory);
               break;
             case 'groq':
               response = await chatWithGroq(formattedHistory, apiKeys.groqApiKey, result.groqModel);
@@ -421,13 +410,13 @@ If you can't answer based on the summary, say so and suggest what information mi
               break;
             default:
               // Fallback to local LLM
-              response = await chatWithLocalLlm(formattedHistory, localLlmUrl);
+              response = await chatWithLocalLlm(formattedHistory);
           }
         } catch (apiError) {
           console.error(`${summarizerType} chat error, falling back to Local LLM:`, apiError);
           
           // Fallback to Local LLM
-          response = await chatWithLocalLlm(formattedHistory, localLlmUrl);
+          response = await chatWithLocalLlm(formattedHistory);
           provider = 'local';
         }
         
@@ -803,31 +792,84 @@ async function chatWithCustom(messages, apiKey, endpoint, model, customHeaders =
 }
 
 // Function to chat using local LLM via LM Studio
-async function chatWithLocalLlm(messages, localLlmUrl) {
-  try {
-    const response = await fetch(`${localLlmUrl}/chat/completions`, {
+async function chatWithLocalLlm(messages) {
+  // Get the custom URL from settings or use default
+  return new Promise((resolve, reject) => {
+    chrome.storage.sync.get(['localLlmUrl'], async function(data) {
+      const localLlmUrl = (data.localLlmUrl || 'http://localhost:1234/v1').trim();
+      
+      try {
+        // Check if LM Studio is available at the specified URL
+        const lmStatus = await checkAndValidateLMStudio(localLlmUrl);
+        
+        // Store the latest status
+        chrome.storage.local.set({ localLlmStatus: {
+          available: lmStatus.connected && lmStatus.modelLoaded,
+          models: lmStatus.models || [],
+          error: lmStatus.error || null,
+          lastChecked: Date.now()
+        }});
+        
+        // If not connected or no model loaded, return error
+        if (!lmStatus.connected) {
+          reject(new Error(lmStatus.error || 'Cannot connect to LM Studio'));
+          return;
+        }
+        
+        if (!lmStatus.modelLoaded) {
+          reject(new Error(lmStatus.error || 'No model loaded in LM Studio'));
+          return;
+        }
+        
+        console.log('Starting local LLM chat with model:', 
+          lmStatus.activeModel?.name || lmStatus.activeModel?.id || 'default');
+        
+        // Create an AbortController for timeout handling
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 30000); // 30-second timeout
+        
+        fetch(`${localLlmUrl}/chat/completions`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'deepseek-r1-distill-qwen-7b',
+            model: lmStatus.activeModel?.id || lmStatus.activeModel?.name || 'default',
         messages: messages,
         max_tokens: 500
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'Error calling local LLM');
-    }
-    
-    return data.choices[0].message.content;
+          }),
+          signal: controller.signal
+        })
+        .then(response => {
+          clearTimeout(timeoutId);
+          console.log('Local LLM response status:', response.status);
+          return response.json();
+        })
+        .then(data => {
+          console.log('Local LLM response data:', data);
+          if (!data.choices || !data.choices[0]) {
+            console.error('Invalid LLM response format:', data);
+            reject(new Error("Invalid response from LLM"));
+            return;
+          }
+          resolve(data.choices[0].message.content);
+        })
+        .catch(error => {
+          clearTimeout(timeoutId);
+          console.error('Local LLM error:', error);
+          
+          if (error.name === 'AbortError') {
+            reject(new Error('LM Studio request timed out after 30 seconds'));
+          } else {
+            reject(new Error(`Failed to get response from LM Studio: ${error.message}`));
+          }
+        });
   } catch (error) {
-    console.error('Local LLM chat error:', error);
-    throw new Error(`Failed to get answer with local LLM: ${error.message}. Make sure LM Studio is running.`);
+        console.error('Local LLM setup error:', error);
+        reject(error);
   }
+    });
+  });
 }
 
 // Function to summarize content using Groq API
@@ -984,36 +1026,57 @@ async function summarizeWithCustom(title, content, apiKey, endpoint, model, cust
   }
 }
 
-// Function to summarize content using local LLM via LM Studio
-async function summarizeWithLocalLlm(title, content, localLlmUrl) {
-  const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
+// RAG Component Initialization
+let vectorDB;
+
+async function initializeRAGComponents() {
+  // Use the already initialized components
+  if (embedder && ragComponent && embedder.initialized && ragComponent.initialized) {
+    console.log('RAG components already initialized');
+    return;
+  }
   
   try {
-    const response = await fetch(`${localLlmUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'deepseek-r1-distill-qwen-7b',
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 500
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'Error calling local LLM');
+    // Initialize if not already done
+    if (!embedder || !embedder.initialized) {
+      if (!embedder) {
+        embedder = new EmbedderImpl();
+      } else {
+        embedder.initialize();
+      }
+      console.log('Embedder initialized successfully');
     }
     
-    return data.choices[0].message.content;
+    if (!ragComponent || !ragComponent.initialized) {
+      if (!ragComponent) {
+        ragComponent = new RAGComponentImpl();
+      } else {
+        ragComponent.initialize();
+      }
+      console.log('RAG component initialized successfully');
+    }
   } catch (error) {
-    console.error('Local LLM error:', error);
-    throw new Error(`Failed to summarize with local LLM: ${error.message}. Make sure LM Studio is running.`);
+    console.error('RAG initialization failed:', error);
+    throw new Error(`RAG initialization failed: ${error.message}`);
+  }
+}
+
+// Web Search class
+class WebSearch {
+  async search(query, maxResults = 3) {
+    try {
+      const response = await fetch(`https://serper.dev/search?q=${encodeURIComponent(query)}`, {
+        method: 'GET',
+        headers: {
+          'X-API-KEY': await getSerperApiKey(),
+          'Content-Type': 'application/json'
+        }
+      });
+      return response.json().then(data => data.results.slice(0, maxResults));
+    } catch (error) {
+      console.error('Web search error:', error);
+      return [];
+    }
   }
 }
 
@@ -1038,4 +1101,283 @@ function saveToHistory(url, title, summary, provider = 'unknown') {
     
     chrome.storage.local.set({ history });
   });
-} 
+}
+
+// Define embedder and RAG component directly in the background.js file
+let embedder = null;
+let ragComponent = null;
+
+// Initialize components on service worker startup
+function initializeComponents() {
+  try {
+    // Create embedder instance using code from imported scripts
+    embedder = new EmbedderImpl();  // This class should be defined in embedder-impl.js
+    ragComponent = new RAGComponentImpl();  // Similarly defined in an imported script
+    
+    return true;
+  } catch (error) {
+    console.error("Component initialization failed:", error);
+    return false;
+  }
+}
+
+// Initialize right away
+initializeComponents();
+
+// Replace the existing checkAndValidateLMStudio function with this more robust version
+async function checkAndValidateLMStudio(localLlmUrl = 'http://localhost:1234/v1') {
+  console.log('Starting LM Studio connection test to:', localLlmUrl);
+  
+  // Ensure URL is properly formatted
+  if (!localLlmUrl) {
+    localLlmUrl = 'http://localhost:1234/v1';
+  }
+  
+  // Make sure the URL has a protocol
+  if (!localLlmUrl.startsWith('http://') && !localLlmUrl.startsWith('https://')) {
+    localLlmUrl = 'http://' + localLlmUrl;
+  }
+  
+  // Ensure URL ends with '/v1' as required by the OpenAI-compatible API
+  if (!localLlmUrl.endsWith('/v1')) {
+    localLlmUrl = localLlmUrl.endsWith('/') ? localLlmUrl + 'v1' : localLlmUrl + '/v1';
+  }
+
+  console.log('Normalized URL for testing:', localLlmUrl);
+  
+  try {
+    // First try basic connectivity with a longer timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    console.log('Testing basic connectivity...');
+    let response;
+    
+    try {
+      // Try a simple health check first (this works for most OpenAI-compatible APIs)
+      response = await fetch(`${localLlmUrl}/health`, {
+        method: 'GET',
+        signal: controller.signal
+      });
+      
+      if (response.ok) {
+        console.log('Health check passed');
+        clearTimeout(timeoutId);
+      }
+    } catch (healthError) {
+      console.log('Health check not available, trying models endpoint instead');
+      // Health check failed, fall back to models endpoint
+    }
+    
+    // If health check failed or wasn't available, try models endpoint
+    if (!response || !response.ok) {
+      try {
+        response = await fetch(`${localLlmUrl}/models`, {
+          method: 'GET',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          signal: controller.signal
+        });
+        clearTimeout(timeoutId);
+      } catch (modelError) {
+        clearTimeout(timeoutId);
+        throw modelError; // rethrow to be caught by outer catch
+      }
+    }
+    
+    // Check if any response was valid
+    if (!response || !response.ok) {
+      const errorStatus = response ? response.status : 'unknown';
+      const errorText = response ? await response.text().catch(() => 'No response text') : 'No response';
+      console.error(`LM Studio API returned error ${errorStatus}:`, errorText);
+      return { 
+        connected: false, 
+        modelLoaded: false, 
+        error: `LM Studio returned error: ${errorStatus} - ${errorText.substring(0, 100)}` 
+      };
+    }
+    
+    // Parse response and skip model checking if we just did a health check
+    let hasModel = false;
+    let modelInfo = { id: 'model', name: 'LM Studio Model' };
+    
+    if (response.url.includes('/models')) {
+      // Try to parse models response
+      try {
+        const data = await response.json();
+        console.log('LM Studio API response:', data);
+        
+        // Handle different API response formats
+        let models = [];
+        if (data.data) models = data.data;
+        else if (data.models) models = data.models;
+        else if (Array.isArray(data)) models = data;
+        
+        // If any data is returned, consider it a success even if models array is empty
+        hasModel = true;
+        if (models.length > 0) {
+          modelInfo = models[0];
+        }
+      } catch (parseError) {
+        console.error('Error parsing models response:', parseError);
+        // Continue anyway, we'll test inference directly
+      }
+    } else {
+      // If health check succeeded, assume a model is loaded
+      hasModel = true;
+    }
+    
+    // Always test inference regardless of model detection
+    console.log('Testing inference capability...');
+    try {
+      // Create a new timeout for the inference test
+      const inferenceController = new AbortController();
+      const inferenceTimeoutId = setTimeout(() => inferenceController.abort(), 15000); // 15 seconds for inference
+      
+      const testResponse = await fetch(`${localLlmUrl}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+          model: modelInfo.id || 'default',
+        messages: [
+            { role: 'system', content: 'You are a helpful assistant.' },
+            { role: 'user', content: 'Say "working" if you can read this.' }
+          ],
+          max_tokens: 10,
+          temperature: 0.1
+        }),
+        signal: inferenceController.signal
+      });
+      
+      clearTimeout(inferenceTimeoutId);
+      
+      if (!testResponse.ok) {
+        const inferenceError = await testResponse.text().catch(() => 'Unknown error');
+        console.error('Inference test failed:', inferenceError);
+        return { 
+          connected: true, 
+          modelLoaded: false, 
+          error: `Connected to LM Studio but inference failed: ${testResponse.status} - ${inferenceError.substring(0, 100)}` 
+        };
+      }
+      
+      // Try to parse the inference response
+      const inferenceData = await testResponse.json().catch(() => null);
+      
+      if (!inferenceData || !inferenceData.choices || !inferenceData.choices[0]) {
+        console.warn('Inference succeeded but returned unexpected format:', inferenceData);
+        // Inference still worked even though response format is unexpected
+      }
+      
+      // If we got here, inference worked!
+      console.log('Inference test passed');
+      
+      return { 
+        connected: true, 
+        modelLoaded: true, 
+        models: [modelInfo],
+        activeModel: {
+          id: modelInfo.id || 'default-model',
+          name: inferenceData?.model || modelInfo.name || 'Deepseek Qwen 7B'
+        }
+      };
+      
+    } catch (inferenceError) {
+      console.error('Inference test error:', inferenceError);
+      return { 
+        connected: true, 
+        modelLoaded: false, 
+        error: `Connected to LM Studio but inference failed: ${inferenceError.message}` 
+      };
+    }
+    
+  } catch (error) {
+    console.error('LM Studio connectivity check failed:', error);
+    
+    // Determine if this is a timeout
+    if (error.name === 'AbortError') {
+      return {
+        connected: false,
+        modelLoaded: false,
+        error: 'Connection timed out. Make sure LM Studio is running and responding.'
+      };
+    }
+    
+    // Handle connection refused and other network errors
+    let errorMessage = error.message;
+    if (error.message.includes('Failed to fetch') || 
+        error.message.includes('NetworkError') ||
+        error.message.includes('ECONNREFUSED') ||
+        error.message.includes('Network request failed')) {
+      errorMessage = 'Cannot connect to LM Studio. Make sure LM Studio is running on your computer.';
+    }
+    
+    return { 
+      connected: false, 
+      modelLoaded: false, 
+      error: errorMessage
+    };
+  }
+}
+
+// Add this function for testing API keys with proper error handling
+async function testApiConnection(apiType, apiKey, model) {
+  try {
+    console.log(`Testing ${apiType} API connection`);
+    
+    // Set up abort controller for timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    let endpoint, headers, body;
+    
+    switch(apiType) {
+      case 'groq':
+        endpoint = 'https://api.groq.com/v1/models';
+        headers = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
+        break;
+      // Add other API types here...
+      default:
+        throw new Error(`Unknown API type: ${apiType}`);
+    }
+    
+    const response = await fetch(endpoint, {
+      method: 'GET',
+      headers: headers,
+      signal: controller.signal
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      return {
+        success: false,
+        error: `API returned error ${response.status}: ${errorText}`
+      };
+    }
+    
+    return {
+      success: true,
+      data: await response.json()
+    };
+  } catch (error) {
+    if (error.name === 'AbortError') {
+      return {
+        success: false,
+        error: 'Connection timed out after 10 seconds'
+      };
+    }
+    
+    return {
+      success: false,
+      error: error.message || 'Unknown error occurred'
+    };
+  }
+}

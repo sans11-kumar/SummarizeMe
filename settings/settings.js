@@ -42,7 +42,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsForm.appendChild(statusMessage);
   
   // Encryption helpers
-  const encryptionKey = 'second-brain-extension-key';
+  const encryptionKey = 'summarize-me-extension-key';
   
   // Function to encrypt sensitive data
   async function encryptData(data) {
@@ -66,7 +66,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },
@@ -128,7 +128,7 @@ document.addEventListener('DOMContentLoaded', async () => {
       const key = await crypto.subtle.deriveKey(
         {
           name: "PBKDF2",
-          salt: new TextEncoder().encode("second-brain-salt"),
+          salt: new TextEncoder().encode("summarize-me-salt"),
           iterations: 100000,
           hash: "SHA-256"
         },
@@ -483,4 +483,170 @@ document.addEventListener('DOMContentLoaded', async () => {
       }, 3000);
     });
   });
+
+  // Add local LLM test functionality
+  const testLocalLlmBtn = document.getElementById('testLocalLlmBtn');
+  const localLlmStatus = document.getElementById('localLlmStatus');
+  const localLlmUrl = document.getElementById('localLlmUrl');
+  
+  if (testLocalLlmBtn && localLlmStatus) {
+    testLocalLlmBtn.addEventListener('click', async function() {
+      // Get the current URL from the input
+      const url = localLlmUrl.value.trim();
+      
+      if (!url) {
+        localLlmStatus.textContent = 'Please enter a URL first';
+        localLlmStatus.className = 'connection-status status-error';
+        return;
+      }
+      
+      // Update status to testing
+      localLlmStatus.textContent = 'Testing connection...';
+      localLlmStatus.className = 'connection-status status-pending';
+      
+      // Add a timeout for UI feedback
+      let responseReceived = false;
+      const uiTimeout = setTimeout(() => {
+        if (!responseReceived) {
+          localLlmStatus.textContent = 'Connection test is taking longer than expected...';
+          localLlmStatus.className = 'connection-status status-pending';
+        }
+      }, 5000);
+      
+      // Call the background script to test the connection
+      chrome.runtime.sendMessage(
+        { 
+          action: 'testLocalLlm', 
+          url: url 
+        },
+        function(response) {
+          responseReceived = true;
+          clearTimeout(uiTimeout);
+          
+          if (!response) {
+            localLlmStatus.textContent = 'Connection test failed';
+            localLlmStatus.className = 'connection-status status-error';
+            return;
+          }
+          
+          const status = response.status;
+          
+          if (status.connected && status.modelLoaded) {
+            // Get model details
+            const modelName = status.activeModel?.name || status.activeModel?.id || 'LM Studio';
+            const modelId = status.activeModel?.id || 'unknown';
+            
+            // Show more comprehensive status with HTML entity instead of Unicode character
+            localLlmStatus.innerHTML = `
+              <div class="status-success"><span class="checkmark"></span> Connected successfully</div>
+              <div class="model-details">
+                <strong>Model:</strong> ${modelName}<br>
+                <strong>ID:</strong> ${modelId}
+              </div>
+            `;
+            localLlmStatus.className = 'connection-status status-success';
+            
+            // Add style for model details
+            const style = document.createElement('style');
+            style.textContent = `
+              .model-details {
+                margin-top: 5px;
+                font-size: 12px;
+                line-height: 1.4;
+                padding: 5px;
+                background: #f8f8f8;
+                border-radius: 3px;
+              }
+              .checkmark {
+                display: inline-block;
+                width: 12px;
+                height: 12px;
+                border-radius: 50%;
+                background-color: #2e7d32;
+                position: relative;
+              }
+              .checkmark:after {
+                content: '';
+                position: absolute;
+                width: 5px;
+                height: 8px;
+                border: solid white;
+                border-width: 0 2px 2px 0;
+                transform: rotate(45deg);
+                top: 1px;
+                left: 4px;
+              }
+            `;
+            document.head.appendChild(style);
+          } else if (status.connected) {
+            localLlmStatus.textContent = '⚠️ Connected to LM Studio, but no model is loaded';
+            localLlmStatus.className = 'connection-status status-pending';
+          } else {
+            localLlmStatus.textContent = `❌ ${status.error || 'Connection failed'}`;
+            localLlmStatus.className = 'connection-status status-error';
+          }
+        }
+      );
+    });
+  }
+
+  // Load the saved settings including local LLM URL
+  chrome.storage.sync.get(['localLlmUrl'], function(data) {
+    if (data.localLlmUrl && localLlmUrl) {
+      localLlmUrl.value = data.localLlmUrl;
+    }
+  });
+  
+  // Save the local LLM URL when it changes
+  if (localLlmUrl) {
+    localLlmUrl.addEventListener('change', function() {
+      chrome.storage.sync.set({ localLlmUrl: localLlmUrl.value });
+      // Clear the status when URL changes
+      if (localLlmStatus) {
+        localLlmStatus.textContent = '';
+        localLlmStatus.className = 'connection-status';
+      }
+    });
+  }
+
+  // Update the radio button event handler in settings.js
+  function handleSummarizerTypeChange() {
+    // Get the selected summarizer type
+    const selectedType = document.querySelector('input[name="summarizerType"]:checked').value;
+    
+    // Hide all API settings sections first
+    document.querySelectorAll('.setting.api-setting, #localSettings').forEach(section => {
+      section.style.display = 'none';
+    });
+    
+    // Show the selected section
+    switch (selectedType) {
+      case 'groq':
+        document.getElementById('groqSettings').style.display = 'block';
+        break;
+      case 'openai':
+        document.getElementById('openaiSettings').style.display = 'block';
+        break;
+      case 'deepseek':
+        document.getElementById('deepseekSettings').style.display = 'block';
+        break;
+      case 'custom':
+        document.getElementById('customSettings').style.display = 'block';
+        break;
+      case 'local':
+        document.getElementById('localSettings').style.display = 'block';
+        break;
+    }
+  }
+
+  // Make sure the local settings element is properly marked for hiding
+  document.getElementById('localSettings').className = 'setting local-setting';
+
+  // Add event listeners to all radio buttons
+  document.querySelectorAll('input[name="summarizerType"]').forEach(radio => {
+    radio.addEventListener('change', handleSummarizerTypeChange);
+  });
+
+  // Call the function on load to set initial state
+  handleSummarizerTypeChange();
 }); 

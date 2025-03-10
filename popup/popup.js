@@ -331,14 +331,34 @@ document.addEventListener('DOMContentLoaded', () => {
       const summarizerType = result.summarizerType || 'local';
       const groqApiKey = result.groqApiKey || '';
       
-      // If using local LLM, show that instead
+      // Get the API status container
+      const apiStatusContainer = document.querySelector('.api-status-container');
+      const apiStatusLabel = document.querySelector('.api-status-label');
+      
+      // If using local LLM, hide the Groq API status completely
       if (summarizerType === 'local') {
-        updateApiStatus(null, 'Using Local LLM');
+        // Hide the old API status display completely
+        if (apiStatusContainer) {
+          apiStatusContainer.style.display = 'none';
+        }
+        
+        // Make sure the provider info display is shown and updated
+        updateProviderDisplay();
         return;
+      } else {
+        // For API-based providers, show the API status
+        if (apiStatusContainer) {
+          apiStatusContainer.style.display = 'flex';
+        }
+        
+        // Update the label to match the provider type
+        if (apiStatusLabel) {
+          apiStatusLabel.textContent = `${summarizerType.charAt(0).toUpperCase() + summarizerType.slice(1)} API:`;
+        }
       }
       
       // If no API key, show not configured
-      if (!groqApiKey) {
+      if (!groqApiKey && summarizerType === 'groq') {
         updateApiStatus(false, 'Not configured');
         return;
       }
@@ -384,4 +404,68 @@ document.addEventListener('DOMContentLoaded', () => {
     
     text.textContent = message;
   }
+
+  // Function to update provider display
+  function updateProviderDisplay() {
+    chrome.storage.sync.get(['summarizerType'], function(data) {
+      const provider = data.summarizerType || 'local';
+      
+      // Clear existing provider displays
+      document.getElementById('providerName').textContent = '';
+      document.getElementById('providerStatus').textContent = '';
+      
+      // Set the correct provider name
+      let providerName = '';
+      switch(provider) {
+        case 'groq':
+          providerName = 'Groq API';
+          break;
+        case 'openai':
+          providerName = 'OpenAI API';
+          break;
+        case 'deepseek':
+          providerName = 'Deepseek API';
+          break;
+        case 'custom':
+          providerName = 'Custom API';
+          break;
+        case 'local':
+        default:
+          providerName = 'Local LLM';
+          // Check local LLM status
+          chrome.storage.local.get(['localLlmStatus'], function(result) {
+            const status = result.localLlmStatus || { available: false };
+            
+            if (status.available) {
+              document.getElementById('providerStatus').textContent = 'Connected';
+              document.getElementById('providerStatus').className = 'status-connected';
+            } else {
+              document.getElementById('providerStatus').textContent = 'Not Connected';
+              document.getElementById('providerStatus').className = 'status-error';
+            }
+          });
+          break;
+      }
+      
+      document.getElementById('providerName').textContent = providerName;
+    });
+  }
+
+  // Initialize provider display
+  updateProviderDisplay();
+  
+  // Check local LLM status
+  chrome.runtime.sendMessage({action: 'checkLocalLlm'}, function(response) {
+    if (response && response.status) {
+      const status = response.status;
+      if (!status.available) {
+        // Show error in UI
+        const errorMsg = document.getElementById('errorMessage');
+        if (errorMsg) {
+          errorMsg.textContent = `LM Studio Connection Error: ${status.error}`;
+          errorMsg.style.display = 'block';
+        }
+      }
+    }
+  });
 }); 

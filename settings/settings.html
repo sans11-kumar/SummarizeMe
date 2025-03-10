@@ -1,6 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
+  <meta charset="UTF-8">
   <title>Summarize Me Settings</title>
   <link rel="stylesheet" href="settings.css">
 </head>
@@ -35,12 +36,16 @@
         </div>
       </div>
       
-      <div class="setting" id="localSettings">
+      <div class="setting local-setting" id="localSettings">
         <h2>Local LLM Settings</h2>
         <div class="form-group">
           <label for="localLlmUrl">LM Studio API URL:</label>
-          <input type="text" id="localLlmUrl" placeholder="http://localhost:1234/v1">
-          <p class="help-text">Make sure LM Studio is running with the deepseek-r1-distill-qwen-7b model loaded</p>
+          <div class="input-with-button">
+            <input type="text" id="localLlmUrl" class="form-control" placeholder="http://localhost:1234/v1">
+            <button id="testLocalLlmBtn" class="test-btn">Test Connection</button>
+          </div>
+          <div id="localLlmStatus" class="connection-status"></div>
+          <small class="help-text">Make sure LM Studio is running with a model loaded</small>
         </div>
       </div>
       

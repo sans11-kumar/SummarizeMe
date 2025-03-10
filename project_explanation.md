@@ -98,12 +98,75 @@ The extension will:
 4. Store this information for the user's reference
 5. Provide configuration options through a settings page
 
+## Architecture
+
+The extension uses a modular architecture with the following components:
+
+1. **Background Script**: Manages communication with LLM providers and coordinates the extension's functionality
+2. **LLM Worker**: Performs text processing and summarization in a separate worker thread
+3. **Popup UI**: Provides the user interface for summarization and chat
+4. **Settings UI**: Allows configuration of providers and API keys
+5. **RAG Component**: Handles retrieval-augmented generation for context-aware responses
+
+## Component Interaction
+
+1. **User Interaction Flow**:
+   - User clicks extension icon → popup.js loads → displays UI
+   - User clicks "Summarize" → message sent to background.js
+   - background.js sends content to llm_worker.js
+   - worker processes and returns summary
+   - popup.js displays results
+
+2. **Provider Selection Flow**:
+   - User selects provider in settings
+   - Provider configuration is saved to chrome.storage.sync
+   - background.js reads settings when processing requests
+   - If primary provider fails, fallback to local LLM
+
+3. **Local LLM Connection**:
+   - background.js checks LM Studio connectivity
+   - Uses comprehensive validation to ensure model is loaded
+   - Tests actual inference capability
+   - Provides detailed error messages for troubleshooting
+
+## Technical Design Decisions
+
+1. **Worker-based Processing**:
+   - Using a worker thread prevents UI freezing during processing
+   - Allows complex operations without blocking the main UI
+
+2. **Provider Abstraction**:
+   - Common interface for all LLM providers
+   - Easy to add new providers with minimal code changes
+   - Automatic fallback for reliability
+
+3. **Local-first Approach**:
+   - Prioritizing local LLM usage reduces dependency on external APIs
+   - Improves privacy by keeping data local
+   - No API costs for users
+
+4. **Security Considerations**:
+   - Optional encryption for API keys
+   - Keys never sent to our servers
+   - Clear error messages without exposing sensitive information
+
+## Future Improvements
+
+1. **Offline Capability**: Enhanced functionality when internet is unavailable
+2. **More Providers**: Adding support for additional LLM providers
+3. **Advanced RAG**: Improving context retrieval for more accurate responses
+4. **UI Enhancements**: More customization options and improved user experience
+5. **Performance Optimization**: Reducing resource usage for better efficiency
+
 ## Technical Implementation
 
-- Uses Manifest V3, the latest extension architecture
-- Employs service workers for background processing
-- Utilizes content scripts for web page interaction
-- Implements browser storage for data persistence
-- Likely integrates with external LLM APIs for summary generation
+Key technical aspects include:
+- RAG pipeline implementation with hybrid embeddings
+- ChromaDB vector database integration
+- Secure API key management using Web Crypto API
+- Content scraping through DOM analysis
+- LLM API integration with multiple providers
+- Real-time progress tracking in UI
+- Fallback mechanisms for API failures
 
 This extension demonstrates modern browser extension architecture while providing useful content summarization functionality.

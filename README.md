@@ -1,146 +1,100 @@
-# Summarize Me Chrome Extension
+# Summarize Me - Web Content Summarizer Extension
 
-A Chrome extension that allows you to summarize web content and ask follow-up questions using multiple LLM providers, including local options and various cloud APIs.
+A Chrome extension that summarizes web content using either a local LLM through LM Studio or various API providers.
 
 ## Features
 
-- Record any URL (blog/video)
-- Scrape the title and content of the page
-- Generate concise summaries using AI
-- Interactive chat interface to ask follow-up questions
-- Multiple LLM provider options with smart fallback
-- Secure, encrypted storage for API keys
-- Progress tracking during summarization
-- Content length optimization for each provider
-
-## Supported LLM Providers
-
-- **Local LLM**: Run locally via LM Studio (no API key needed)
-- **Groq API**: Fast, efficient models like Llama-3 and Mixtral
-- **OpenAI API**: GPT-3.5 Turbo, GPT-4, and GPT-4 Turbo
-- **Deepseek API**: Deepseek Chat and Coder models
-- **Custom API**: Support for any OpenAI-compatible API endpoint
+- Summarize any web page with a single click
+- Ask follow-up questions about the content
+- Multiple LLM providers:
+  - Local LLM via LM Studio (no API keys needed!)
+  - Groq API
+  - OpenAI API
+  - Deepseek API
+  - Custom API support
+- Secure API key storage with encryption
+- Automatic provider fallback if one fails
 
 ## Installation
 
-### From Source
+1. Download the extension files
+2. Open Chrome and navigate to `chrome://extensions/`
+3. Enable "Developer mode" in the top-right corner
+4. Click "Load unpacked" and select the extension folder
+5. The extension icon will appear in your toolbar
 
-1. Clone or download this repository
-2. **Create the icon files**: Before loading the extension, make sure to create icon files in the `icons` directory:
-   - Create `icon16.png` (16x16 pixels)
-   - Create `icon48.png` (48x48 pixels)
-   - Create `icon128.png` (128x128 pixels)
-   - You can use tools like Canva, favicon.cc, or Flaticon to create these icons
-3. Open Chrome and navigate to `chrome://extensions/`
-4. Enable "Developer mode" in the top right
-5. Click "Load unpacked" and select this extension directory
-6. The extension should now be installed and visible in your toolbar
+## Setup and Usage
 
-## Setup
-
-### Local LLM (No API Key Required)
+### Local LLM Setup (Recommended)
 
 1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Open LM Studio and download the `deepseek-r1-distill-qwen-7b` model
-3. Start the local server in LM Studio (it should run on http://localhost:1234 by default)
-4. Click the extension icon and go to Settings
-5. Select "Local LLM" as the summarization method
-6. Enter the local API URL (default: http://localhost:1234/v1)
-7. Save settings
+2. Start LM Studio and load a model (recommended: Deepseek Qwen 7B)
+3. Start the local server in LM Studio
+4. In the extension settings, ensure "Local LLM" is selected
+5. Click the "Test Connection" button to verify LM Studio is working
 
-### Groq API
+### Using Cloud API Providers
 
-1. Sign up for a [Groq account](https://groq.com/) and get an API key
-2. Click the extension icon and go to Settings
-3. Select "Groq API" as the summarization method
-4. Enter your Groq API key
-5. Choose a model from the dropdown (Llama-3 8B, Llama-3 70B, or Mixtral)
-6. Click "Test Connection" to verify your API key works
-7. Save settings
+1. Open the extension settings and select your preferred provider
+2. Enter your API key for the selected provider
+3. Choose the model you want to use
+4. Save your settings
 
-### OpenAI API
-
-1. Sign up for an [OpenAI account](https://openai.com/) and get an API key
-2. Click the extension icon and go to Settings
-3. Select "OpenAI API" as the summarization method
-4. Enter your OpenAI API key
-5. Choose a model from the dropdown (GPT-3.5 Turbo, GPT-4, or GPT-4 Turbo)
-6. Click "Test Connection" to verify your API key works
-7. Save settings
-
-### Deepseek API
-
-1. Sign up for a [Deepseek account](https://deepseek.ai/) and get an API key
-2. Click the extension icon and go to Settings
-3. Select "Deepseek API" as the summarization method
-4. Enter your Deepseek API key
-5. Choose a model from the dropdown
-6. Click "Test Connection" to verify your API key works
-7. Save settings
-
-### Custom API
-
-1. Obtain an API key for your preferred OpenAI-compatible API provider
-2. Click the extension icon and go to Settings
-3. Select "Custom API" as the summarization method
-4. Enter a name for your provider
-5. Enter the API endpoint URL
-6. Enter your API key
-7. Specify the model name
-8. Add any additional headers if required (in JSON format)
-9. Click "Test Connection" to verify your settings
-10. Save settings
-
-## Usage
+### Summarizing Content
 
 1. Navigate to any webpage you want to summarize
 2. Click the extension icon in your toolbar
-3. Click "Summarize This Page"
-4. Watch the progress bar as content is extracted and processed
-5. The summary will appear in the extension popup
-6. Use the chat interface below the summary to ask follow-up questions about the content
-
-## Security Features
-
-- **API Key Encryption**: All API keys are encrypted before storage using the Web Crypto API
-- **Local Storage Only**: API keys are stored only in your browser's secure storage
-- **No Remote Transmission**: Keys are never sent anywhere except to their respective API services
-- **Optional Encryption**: You can toggle encryption on/off in settings (enabled by default)
-- **No Plaintext Storage**: Keys are never stored in plaintext in the extension code
-
-## Git Security Considerations
-
-If you're planning to push this code to a Git repository:
-
-1. **No API Keys in Code**: The extension is designed so API keys are stored only in your browser's secure storage, not in the code
-2. **Check Before Committing**: Always review your changes before committing to ensure no secrets are included
-3. **Consider Adding .gitignore**: Add any development-specific files to .gitignore
+3. Press "Summarize This Page"
+4. Wait for the summary to generate
+5. Use the chat interface to ask follow-up questions
 
 ## Troubleshooting
 
-If the extension doesn't work properly, check the following:
+### Local LLM Issues
 
-1. **Icons are missing**: Make sure you've created the icon files in the `icons` directory
-2. **Local LLM not working**: Ensure LM Studio is running with the local server enabled
-3. **API keys invalid**: Check that your API keys are correct and have the necessary permissions
-4. **Content scraping issues**: Some websites may have complex layouts that are difficult to scrape
-5. **Token limits**: Very long pages will be automatically truncated
-6. **Chrome Developer console**: Check for any errors in the console by right-clicking the extension popup and selecting "Inspect"
+- **Connection error**: Make sure LM Studio is running and the server is started
+- **No model loaded**: Load a model in LM Studio and restart the server
+- **Slow responses**: Consider using a smaller model in LM Studio
+- **API URL format**: The default URL is `http://localhost:1234/v1` - change only if you've configured LM Studio differently
+
+### API Provider Issues
+
+- **Invalid API key**: Double-check your API key for typos
+- **Connection timeouts**: There might be network issues or the provider might be experiencing high traffic
+- **Model not available**: Some models might be restricted by the provider - try a different model
+
+## Privacy and Security
+
+- API keys are stored locally on your device
+- Optional encryption is available for added security
+- No data is sent to our servers - all processing happens either locally or directly with your chosen provider
+
+## Support
+
+For issues, questions, or contributions, please visit our GitHub repository.
 
 ## Project Structure
 
 ```
-second-brain/
+summarize-me/
 ├── manifest.json         # Extension configuration
-├── README.md             # This file
-├── background/           # Background service worker
-│   └── background.js     # Handles summarization and AI logic
-├── content/              # Content scripts
-│   └── content.js        # Scrapes webpage content
+├── README.md             # Documentation
+├── project_explanation.md # Technical architecture documentation
+├── background/           # Service worker and AI processing
+│   ├── background.js     # Main background script
+│   └── rag/              # Retrieval-Augmented Generation
+│       └── embedder-impl.js # Content embedding implementation
+├── llm/                  # LLM processing components
+│   ├── llm_worker.js     # Worker for non-blocking LLM operations
+│   ├── embedder.js       # Handles text embeddings
+│   ├── rag.js            # RAG component for context retrieval
+│   └── llm_processor.js  # LLM inference handling
 ├── popup/                # Extension popup UI
 │   ├── popup.html        # Popup HTML structure with chat interface
 │   ├── popup.css         # Popup styling
 │   └── popup.js          # Popup interaction logic
+├── content/              # Content scripts
+│   └── content.js        # Scrapes webpage content
 ├── settings/             # Settings page
 │   ├── settings.html     # Settings UI with multiple providers
 │   ├── settings.css      # Settings styling
@@ -150,6 +104,18 @@ second-brain/
     ├── icon48.png        # 48x48 icon
     └── icon128.png       # 128x128 icon
 ```
+
+### Key Directories Explained
+
+- **background/**: Contains the service worker that runs in the background. The `rag/` subdirectory holds components for retrieval-augmented generation.
+
+- **llm/**: Handles all language model operations in a separate worker thread to avoid blocking the UI. This includes text processing, summarization, and context-aware responses.
+
+- **popup/**: The user interface that appears when clicking the extension icon, showing summarized content and the chat interface.
+
+- **content/**: Scripts that are injected into web pages to extract content for summarization.
+
+- **settings/**: The configuration page where users can select providers and enter API keys.
 
 ## Limitations
 
@@ -164,3 +130,34 @@ second-brain/
 - LM Studio for local LLM inference
 - Web Crypto API for secure encryption
 - Various LLM APIs (Groq, OpenAI, Deepseek, etc.)
+
+## Architecture Overview
+
+The extension uses a modular architecture with clear separation of concerns:
+
+1. **User Interface Layer**:
+   - `popup/` provides the main UI for viewing summaries and chatting
+   - `settings/` handles configuration options
+
+2. **Background Processing Layer**:
+   - `background/background.js` coordinates activities and manages communication
+   - Handles provider selection and API integration
+
+3. **Content Processing Layer**:
+   - `content/content.js` extracts text content from web pages
+   - Handles DOM traversal and content cleaning
+
+4. **LLM Processing Layer**:
+   - `llm/` directory contains all LLM-related processing
+   - Uses a worker thread for non-blocking operations
+   - Manages RAG pipeline for context-aware responses
+
+5. **Storage Layer**:
+   - Uses Chrome's storage APIs for persistence
+   - Securely handles API keys and user preferences
+
+This layered approach ensures separation of concerns, making the extension easier to maintain and extend.
+
+## Conclusion
+
+The project has a sensible structure overall, but there are some redundancies and the documentation doesn't fully explain the purpose

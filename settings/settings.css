@@ -182,4 +182,42 @@ button:disabled {
 
 .settings-info li {
   margin-bottom: 8px;
+}
+
+/* Add these styles for the connection testing UI */
+.input-with-button {
+  display: flex;
+  gap: 8px;
+}
+
+.test-btn {
+  background-color: #f0f0f0;
+  color: #333;
+  border: 1px solid #ccc;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.test-btn:hover {
+  background-color: #e0e0e0;
+}
+
+.connection-status {
+  margin-top: 6px;
+  font-size: 13px;
+  min-height: 20px;
+}
+
+.status-success {
+  color: #2e7d32;
+}
+
+.status-error {
+  color: #c62828;
+}
+
+.status-pending {
+  color: #f57c00;
+  font-style: italic;
 } 
