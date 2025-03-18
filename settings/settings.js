@@ -46,8 +46,16 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Function to encrypt sensitive data
   async function encryptData(data) {
+    // If data is empty, return empty string
+    if (!data) return '';
+    
+    console.log('Encrypting data, length:', data.length);
+    
     if (!encryptionEnabledInput.checked) {
-      return btoa(data); // Simple base64 encoding if encryption is disabled
+      // Simple base64 encoding if encryption is disabled
+      const encoded = btoa(data);
+      console.log('Using base64 encoding, result length:', encoded.length);
+      return encoded;
     }
     
     try {
@@ -77,24 +85,30 @@ document.addEventListener('DOMContentLoaded', async () => {
       );
       
       // Encrypt the data
-      const encrypted = await crypto.subtle.encrypt(
+      const encoded = new TextEncoder().encode(data);
+      const ciphertext = await crypto.subtle.encrypt(
         {
           name: "AES-GCM",
           iv: iv
         },
         key,
-        new TextEncoder().encode(data)
+        encoded
       );
       
-      // Combine the IV and encrypted data and convert to base64
-      const encryptedArray = new Uint8Array(iv.byteLength + encrypted.byteLength);
-      encryptedArray.set(iv, 0);
-      encryptedArray.set(new Uint8Array(encrypted), iv.byteLength);
+      // Combine IV and ciphertext
+      const result = new Uint8Array(iv.length + new Uint8Array(ciphertext).length);
+      result.set(iv, 0);
+      result.set(new Uint8Array(ciphertext), iv.length);
       
-      return btoa(String.fromCharCode.apply(null, encryptedArray));
+      // Convert to base64
+      const base64 = btoa(String.fromCharCode.apply(null, result));
+      console.log('Using encryption, result length:', base64.length);
+      
+      return base64;
     } catch (error) {
-      console.error('Encryption error:', error);
-      // Fallback to base64 if encryption fails
+      console.error('Error encrypting data:', error);
+      // Fallback to simple base64 encoding
+      console.log('Falling back to base64 encoding');
       return btoa(data);
     }
   }
@@ -248,6 +262,23 @@ document.addEventListener('DOMContentLoaded', async () => {
       if (summarizerType !== 'local') {
         validateCurrentProvider();
       }
+      
+      // Add after loading settings
+      const localLlmTestBtn = document.createElement('button');
+      localLlmTestBtn.type = 'button';
+      localLlmTestBtn.className = 'test-connection-btn';
+      localLlmTestBtn.textContent = 'Test LM Studio Connection';
+      localLlmTestBtn.addEventListener('click', testLocalLlmConnection);
+      
+      // Add to local settings section
+      const localLlmUrlGroup = document.querySelector('#localSettings .form-group');
+      localLlmUrlGroup.appendChild(localLlmTestBtn);
+      
+      // Add local LLM status display
+      const localLlmStatus = document.createElement('div');
+      localLlmStatus.className = 'connection-status';
+      localLlmStatus.innerHTML = '<span class="status-indicator unknown"></span> <span class="status-text">Not tested</span>';
+      localLlmUrlGroup.appendChild(localLlmStatus);
     });
   }
   
@@ -291,7 +322,61 @@ document.addEventListener('DOMContentLoaded', async () => {
   
   // Test connection button
   testConnectionBtn.addEventListener('click', () => {
-    validateCurrentProvider();
+    // Get the active provider type
+    const type = getActiveProvider();
+    
+    // Handle Local LLM specially
+    if (type === 'local') {
+      testLocalLlmConnection();
+      return;
+    }
+    
+    // Use the current value in the input field, not the stored value
+    let apiKey = '';
+    let endpoint = '';
+    let headers = '';
+    
+    switch(type) {
+      case 'groq':
+        apiKey = groqApiKeyInput.value.trim();
+        break;
+      case 'openai':
+        apiKey = openaiApiKeyInput.value.trim();
+        break;
+      case 'deepseek':
+        apiKey = deepseekApiKeyInput.value.trim();
+        break;
+      case 'custom':
+        apiKey = customApiKeyInput.value.trim();
+        endpoint = customApiEndpointInput.value.trim();
+        headers = customApiHeadersInput.value.trim();
+        break;
+    }
+    
+    // Get the status element
+    const statusElement = document.querySelector(`#${type}Settings .connection-status`);
+    if (!statusElement) return;
+    
+    // If no API key, show error
+    if (!apiKey && type !== 'local') {
+      updateConnectionStatus(statusElement, false, 'API key is required');
+      return;
+    }
+    
+    // Update status to testing
+    updateConnectionStatus(statusElement, null, 'Testing connection...');
+    
+    // Test the connection directly without encryption
+    validateApiKey(type, apiKey, endpoint, headers).then((result) => {
+      updateConnectionStatus(
+        statusElement,
+        result.isValid,
+        result.isValid ? 'Connection successful' : (result.message || 'Connection failed')
+      );
+    }).catch((error) => {
+      console.error(`Error testing ${type} connection:`, error);
+      updateConnectionStatus(statusElement, false, 'Connection error');
+    });
   });
   
   // Get the active provider type and settings
@@ -410,20 +495,10 @@ document.addEventListener('DOMContentLoaded', async () => {
   settingsForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     saveButton.disabled = true;
-    statusMessage.textContent = 'Validating settings...';
-    statusMessage.className = 'status-message info';
     
-    // Get the selected summarizer type
-    let summarizerType = 'local';
-    for (const input of summarizerTypeInputs) {
-      if (input.checked) {
-        summarizerType = input.value;
-        break;
-      }
-    }
-    
-    // Get other values
-    const localLlmUrl = localLlmUrlInput.value.trim() || 'http://localhost:1234/v1';
+    // Get values from form
+    const summarizerType = getActiveProvider();
+    const localLlmUrl = localLlmUrlInput.value.trim();
     const groqApiKey = groqApiKeyInput.value.trim();
     const groqModel = groqModelSelect.value;
     const openaiApiKey = openaiApiKeyInput.value.trim();
@@ -437,50 +512,376 @@ document.addEventListener('DOMContentLoaded', async () => {
     const customApiHeaders = customApiHeadersInput.value.trim();
     const encryptionEnabled = encryptionEnabledInput.checked;
     
-    // Validate if selected provider is valid
+    // Validate required fields based on selected provider
     if (summarizerType !== 'local') {
-      const isValid = await validateCurrentProvider();
+      // Skip validation if saving settings and just proceed
+      console.log(`Saving settings for ${summarizerType} provider`);
+      statusMessage.textContent = 'Saving settings...';
+      statusMessage.className = 'status-message info';
       
-      if (!isValid) {
-        statusMessage.textContent = `Invalid ${summarizerType.toUpperCase()} API settings. Please check your API key and other settings.`;
-        statusMessage.className = 'status-message error';
+      // Encrypt sensitive data
+      const encryptedGroqApiKey = groqApiKey ? await encryptData(groqApiKey) : '';
+      const encryptedOpenaiApiKey = openaiApiKey ? await encryptData(openaiApiKey) : '';
+      const encryptedDeepseekApiKey = deepseekApiKey ? await encryptData(deepseekApiKey) : '';
+      const encryptedCustomApiKey = customApiKey ? await encryptData(customApiKey) : '';
+      
+      // Save to storage
+      chrome.storage.sync.set({
+        summarizerType,
+        localLlmUrl,
+        encryptedGroqApiKey,
+        groqModel,
+        encryptedOpenaiApiKey,
+        openaiModel,
+        encryptedDeepseekApiKey,
+        deepseekModel,
+        customApiName,
+        customApiEndpoint,
+        encryptedCustomApiKey,
+        customApiModel,
+        customApiHeaders,
+        encryptionEnabled
+      }, () => {
+        // Show success message
+        statusMessage.textContent = 'Settings saved successfully!';
+        statusMessage.className = 'status-message success';
         saveButton.disabled = false;
-        return;
+        
+        // Remove message after 3 seconds
+        setTimeout(() => {
+          statusMessage.textContent = '';
+        }, 3000);
+      });
+    } else {
+      // For local LLM, just save without validation
+      chrome.storage.sync.set({
+        summarizerType,
+        localLlmUrl,
+        encryptionEnabled
+      }, () => {
+        // Show success message
+        statusMessage.textContent = 'Settings saved successfully!';
+        statusMessage.className = 'status-message success';
+        saveButton.disabled = false;
+        
+        // Remove message after 3 seconds
+        setTimeout(() => {
+          statusMessage.textContent = '';
+        }, 3000);
+      });
+    }
+  });
+  
+  // Fixed function to test Local LLM connection with better timeout handling
+  async function testLocalLlmConnection(url = null) {
+    // Safely get the URL, ensuring it's a string
+    let localUrl;
+    try {
+      const urlInput = document.getElementById('localLlmUrl');
+      if (url && typeof url === 'string') {
+        localUrl = url.trim();
+      } else if (urlInput && urlInput.value) {
+        localUrl = urlInput.value.trim();
+      } else {
+        localUrl = 'http://localhost:1234/v1';
       }
+      
+      console.log('Using Local LLM URL:', localUrl);
+    } catch (error) {
+      console.error('Error getting Local LLM URL:', error);
+      localUrl = 'http://localhost:1234/v1';
     }
     
-    // Encrypt sensitive data
-    const encryptedGroqApiKey = groqApiKey ? await encryptData(groqApiKey) : '';
-    const encryptedOpenaiApiKey = openaiApiKey ? await encryptData(openaiApiKey) : '';
-    const encryptedDeepseekApiKey = deepseekApiKey ? await encryptData(deepseekApiKey) : '';
-    const encryptedCustomApiKey = customApiKey ? await encryptData(customApiKey) : '';
+    // Get status element
+    const statusElement = document.querySelector('#localSettings .connection-status');
+    if (!statusElement) {
+      console.error('Status element not found');
+      return false;
+    }
     
-    // Save to storage
-    chrome.storage.sync.set({
-      summarizerType,
-      localLlmUrl,
-      encryptedGroqApiKey,
-      groqModel,
-      encryptedOpenaiApiKey,
-      openaiModel,
-      encryptedDeepseekApiKey,
-      deepseekModel,
-      customApiName,
-      customApiEndpoint,
-      encryptedCustomApiKey,
-      customApiModel,
-      customApiHeaders,
-      encryptionEnabled
-    }, () => {
-      // Show success message
-      statusMessage.textContent = 'Settings saved successfully!';
-      statusMessage.className = 'status-message success';
-      saveButton.disabled = false;
+    // Update status to testing
+    updateConnectionStatus(statusElement, null, 'Testing LM Studio connection...');
+    
+    try {
+      // Ensure the URL is properly formatted
+      let baseUrl;
+      if (localUrl.endsWith('/v1')) {
+        baseUrl = localUrl;
+      } else if (localUrl.endsWith('/')) {
+        baseUrl = localUrl + 'v1';
+      } else {
+        baseUrl = localUrl + '/v1';
+      }
       
-      // Remove message after 3 seconds
-      setTimeout(() => {
-        statusMessage.textContent = '';
-      }, 3000);
+      console.log(`Testing LM Studio connection at ${baseUrl}`);
+      
+      // Test models endpoint with longer timeout (30 seconds)
+      updateConnectionStatus(statusElement, null, 'Checking server status...');
+      
+      // Create a controller with a 30-second timeout
+      const modelsController = new AbortController();
+      const modelsTimeoutId = setTimeout(() => modelsController.abort(), 30000);
+      
+      try {
+        const modelsResponse = await fetch(`${baseUrl}/models`, {
+          method: 'GET',
+          headers: {
+            'Connection': 'keep-alive'
+          },
+          signal: modelsController.signal
+        });
+        
+        clearTimeout(modelsTimeoutId);
+        
+        if (!modelsResponse.ok) {
+          const errorText = await modelsResponse.text();
+          console.error('LM Studio models endpoint error:', errorText);
+          updateConnectionStatus(statusElement, false, `Server error: ${modelsResponse.status} - ${errorText.substring(0, 50)}`);
+          return false;
+        }
+        
+        updateConnectionStatus(statusElement, null, 'Server found, testing model inference...');
+        
+        // Now test a simple completion with longer timeout (1 minute)
+        const completionController = new AbortController();
+        const completionTimeoutId = setTimeout(() => completionController.abort(), 60000);
+        
+        try {
+          // Do a very simple query to test if inference is working
+          const completionResponse = await fetch(`${baseUrl}/chat/completions`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'Connection': 'keep-alive'
+            },
+            body: JSON.stringify({
+              model: "any-model",
+              messages: [
+                { role: 'system', content: 'You are a helpful assistant.' },
+                { role: 'user', content: 'Say hello in one word.' }
+              ],
+              max_tokens: 10, // Very small to ensure fast response
+              temperature: 0.7,
+              stream: false
+            }),
+            signal: completionController.signal
+          });
+          
+          clearTimeout(completionTimeoutId);
+          
+          if (!completionResponse.ok) {
+            const errorText = await completionResponse.text();
+            console.error('LM Studio inference test error:', errorText);
+            updateConnectionStatus(statusElement, false, 'Server is running but inference failed. Is a model loaded?');
+            return false;
+          }
+          
+          const completionData = await completionResponse.json();
+          console.log('LM Studio inference test response:', completionData);
+          
+          // All tests passed
+          updateConnectionStatus(statusElement, true, 'LM Studio connection successful!');
+          return true;
+        } catch (completionError) {
+          clearTimeout(completionTimeoutId);
+          throw completionError;
+        }
+      } catch (modelsError) {
+        clearTimeout(modelsTimeoutId);
+        throw modelsError;
+      }
+    } catch (error) {
+      console.error('Error testing LM Studio connection:', error);
+      
+      if (error.name === 'AbortError') {
+        updateConnectionStatus(statusElement, false, 'Connection timed out. The model might be too slow or not responding.');
+      } else if (error.message.includes('Failed to fetch')) {
+        updateConnectionStatus(statusElement, false, 'Cannot connect to LM Studio. Is the server running?');
+      } else {
+        updateConnectionStatus(statusElement, false, `Connection error: ${error.message}`);
+      }
+      
+      return false;
+    }
+  }
+
+  // Add this after your existing event listeners in settings.js
+  function setupApiKeyValidation() {
+    // Add validation to Groq API key input
+    groqApiKeyInput.addEventListener('blur', async function() {
+      if (this.value.trim()) {
+        // Show validation in progress
+        const statusElement = groqSettings.querySelector('.connection-status');
+        if (statusElement) {
+          updateConnectionStatus(statusElement, null, 'Validating key...');
+        }
+        
+        try {
+          // Test the key immediately
+          const result = await validateApiKey('groq', this.value.trim());
+          
+          // Update status
+          if (statusElement) {
+            updateConnectionStatus(
+              statusElement, 
+              result.isValid, 
+              result.isValid ? 'Valid API key' : (result.message || 'Invalid API key')
+            );
+          }
+        } catch (error) {
+          console.error('Error validating Groq API key:', error);
+          if (statusElement) {
+            updateConnectionStatus(statusElement, false, 'Validation error');
+          }
+        }
+      }
     });
-  });
+    
+    // Do the same for other API providers
+    openaiApiKeyInput.addEventListener('blur', async function() {
+      if (this.value.trim()) {
+        const statusElement = openaiSettings.querySelector('.connection-status');
+        if (statusElement) updateConnectionStatus(statusElement, null, 'Validating key...');
+        
+        try {
+          const result = await validateApiKey('openai', this.value.trim());
+          if (statusElement) {
+            updateConnectionStatus(
+              statusElement, 
+              result.isValid, 
+              result.isValid ? 'Valid API key' : (result.message || 'Invalid API key')
+            );
+          }
+        } catch (error) {
+          console.error('Error validating OpenAI API key:', error);
+          if (statusElement) updateConnectionStatus(statusElement, false, 'Validation error');
+        }
+      }
+    });
+    
+    // Add for Deepseek and Custom API as well
+    deepseekApiKeyInput.addEventListener('blur', async function() {
+      if (this.value.trim()) {
+        const statusElement = deepseekSettings.querySelector('.connection-status');
+        if (statusElement) updateConnectionStatus(statusElement, null, 'Validating key...');
+        
+        try {
+          const result = await validateApiKey('deepseek', this.value.trim());
+          if (statusElement) {
+            updateConnectionStatus(
+              statusElement,
+              result.isValid,
+              result.isValid ? 'Valid API key' : (result.message || 'Invalid API key')
+            );
+          }
+        } catch (error) {
+          console.error('Error validating Deepseek API key:', error);
+          if (statusElement) updateConnectionStatus(statusElement, false, 'Validation error');
+        }
+      }
+    });
+    
+    customApiKeyInput.addEventListener('blur', async function() {
+      if (this.value.trim() && customApiEndpointInput.value.trim()) {
+        const statusElement = customSettings.querySelector('.connection-status');
+        if (statusElement) updateConnectionStatus(statusElement, null, 'Validating key...');
+        
+        try {
+          const result = await validateApiKey(
+            'custom', 
+            this.value.trim(), 
+            customApiEndpointInput.value.trim(),
+            customApiHeadersInput.value.trim()
+          );
+          if (statusElement) {
+            updateConnectionStatus(
+              statusElement,
+              result.isValid,
+              result.isValid ? 'Valid API key' : (result.message || 'Invalid API key')
+            );
+          }
+        } catch (error) {
+          console.error('Error validating Custom API key:', error);
+          if (statusElement) updateConnectionStatus(statusElement, false, 'Validation error');
+        }
+      }
+    });
+  }
+
+  // Helper function to validate API keys directly without encryption
+  async function validateApiKey(provider, apiKey, endpoint, headers) {
+    try {
+      let url = '';
+      let requestHeaders = {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json'
+      };
+      
+      switch(provider) {
+        case 'groq':
+          url = 'https://api.groq.com/openai/v1/models';
+          break;
+        case 'openai':
+          url = 'https://api.openai.com/v1/models';
+          break;
+        case 'deepseek':
+          url = 'https://api.deepseek.com/v1/models';
+          break;
+        case 'custom':
+          if (!endpoint) {
+            return { isValid: false, message: 'API endpoint is required' };
+          }
+          url = endpoint.endsWith('/models') ? endpoint : 
+                (endpoint.endsWith('/') ? endpoint + 'models' : endpoint + '/models');
+                
+          // Add custom headers if provided
+          if (headers) {
+            try {
+              const parsedHeaders = JSON.parse(headers);
+              requestHeaders = { ...requestHeaders, ...parsedHeaders };
+            } catch (e) {
+              console.error('Error parsing custom headers:', e);
+            }
+          }
+          break;
+        default:
+          return { isValid: false, message: 'Unknown provider' };
+      }
+      
+      // Create a controller for timeout
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+      
+      const response = await fetch(url, {
+        method: 'GET',
+        headers: requestHeaders,
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        return { 
+          isValid: false, 
+          message: `API returned status ${response.status}: ${errorText.substring(0, 100)}`
+        };
+      }
+      
+      await response.json(); // Make sure we can parse the response
+      
+      return { isValid: true, message: 'API key is valid' };
+    } catch (error) {
+      console.error(`API validation error (${provider}):`, error);
+      
+      if (error.name === 'AbortError') {
+        return { isValid: false, message: 'Connection timed out' };
+      }
+      
+      return { isValid: false, message: error.message };
+    }
+  }
+
+  // Call this function after loading settings
+  setupApiKeyValidation();
 }); 

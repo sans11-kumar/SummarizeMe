@@ -78,6 +78,7 @@ Based on the manifest.json, the project has the following structure:
    - User clicks the extension icon, opening popup.html
    - Through the popup, user can trigger URL recording and content summarization
    - User can access settings.html to configure the extension
+   - User selects preferred AI models for each provider in settings
 
 4. **Content Processing**:
    - content.js is injected into web pages
@@ -86,7 +87,8 @@ Based on the manifest.json, the project has the following structure:
 
 5. **Summary Generation**:
    - Scraped content is processed
-   - LLM integration generates summaries
+   - User-selected model is dynamically retrieved from settings
+   - LLM integration generates summaries using the selected model
    - Results are stored and displayed to the user
 
 ## Functionality
@@ -94,16 +96,19 @@ Based on the manifest.json, the project has the following structure:
 The extension will:
 1. Record URLs that the user visits or selects
 2. Extract content from those web pages
-3. Use LLM technology to generate concise summaries
+3. Use LLM technology to generate concise summaries with user-selected models
 4. Store this information for the user's reference
-5. Provide configuration options through a settings page
+5. Provide configuration options through a settings page including model selection
+6. Dynamically use the appropriate model based on user preferences
 
 ## Technical Implementation
 
 - Uses Manifest V3, the latest extension architecture
 - Employs service workers for background processing
 - Utilizes content scripts for web page interaction
-- Implements browser storage for data persistence
-- Likely integrates with external LLM APIs for summary generation
+- Implements browser storage for data persistence and user preferences
+- Dynamically selects AI models based on user configuration
+- Integrates with external LLM APIs using user-selected models
+- Provides fallback models when user preferences are not available
 
-This extension demonstrates modern browser extension architecture while providing useful content summarization functionality.
+This extension demonstrates modern browser extension architecture while providing useful content summarization functionality with flexible model selection.

@@ -327,43 +327,65 @@ document.addEventListener('DOMContentLoaded', () => {
   // Function to check API connection status
   async function checkApiStatus() {
     // Get stored settings
-    chrome.storage.sync.get(['summarizerType', 'groqApiKey'], async (result) => {
+    chrome.storage.sync.get(['summarizerType'], async (result) => {
       const summarizerType = result.summarizerType || 'local';
-      const groqApiKey = result.groqApiKey || '';
       
-      // If using local LLM, show that instead
-      if (summarizerType === 'local') {
-        updateApiStatus(null, 'Using Local LLM');
-        return;
+      // Update the API status label based on provider
+      let providerName = 'API';
+      switch (summarizerType) {
+        case 'local':
+          providerName = 'Local LLM';
+          updateApiStatus(null, 'Using Local LLM');
+          break;
+        case 'groq':
+          providerName = 'Groq API';
+          testApiConnection('groq');
+          break;
+        case 'openai':
+          providerName = 'OpenAI API';
+          testApiConnection('openai');
+          break;
+        case 'deepseek':
+          providerName = 'Deepseek API';
+          testApiConnection('deepseek');
+          break;
+        case 'custom':
+          // Get custom provider name
+          chrome.storage.sync.get(['customApiName'], (customResult) => {
+            const customName = customResult.customApiName || 'Custom API';
+            apiStatusLabel.textContent = `${customName}:`;
+            testApiConnection('custom');
+          });
+          return; // Handle custom separately due to async
       }
       
-      // If no API key, show not configured
-      if (!groqApiKey) {
-        updateApiStatus(false, 'Not configured');
-        return;
-      }
-      
-      // Test the API key
-      try {
-        const response = await new Promise((resolve) => {
-          chrome.runtime.sendMessage(
-            { 
-              action: 'validateGroqApiKey', 
-              data: { apiKey: groqApiKey } 
-            },
-            (response) => resolve(response)
-          );
-        });
-        
-        updateApiStatus(
-          response.success && response.isValid, 
-          response.isValid ? 'Connected' : 'Connection failed'
-        );
-      } catch (error) {
-        console.error('Error checking API status:', error);
-        updateApiStatus(false, 'Connection error');
-      }
+      apiStatusLabel.textContent = `${providerName}:`;
     });
+  }
+  
+  // Function to test API connection
+  async function testApiConnection(provider) {
+    updateApiStatus(null, 'Checking...');
+    
+    try {
+      const result = await new Promise((resolve) => {
+        chrome.runtime.sendMessage(
+          { 
+            action: 'validateApiConnection', 
+            data: { provider }
+          },
+          (response) => resolve(response)
+        );
+      });
+      
+      updateApiStatus(
+        result.success && result.isValid, 
+        result.isValid ? 'Connected' : (result.message || 'Connection failed')
+      );
+    } catch (error) {
+      console.error(`Error checking ${provider} API status:`, error);
+      updateApiStatus(false, 'Connection error');
+    }
   }
   
   // Function to update API status display
@@ -384,4 +406,103 @@ document.addEventListener('DOMContentLoaded', () => {
     
     text.textContent = message;
   }
+
+  // Enhanced monitoring function
+  function monitorSummarizationProgress() {
+    chrome.storage.local.get(['activeSummarizationTask'], (result) => {
+      const task = result.activeSummarizationTask;
+      const resetBtn = document.getElementById('reset-btn');
+      
+      if (task) {
+        const currentTime = Date.now();
+        const elapsedTime = currentTime - task.timestamp;
+        
+        // After 30 seconds, show the reset button
+        if (elapsedTime > 30000) {
+          if (resetBtn) resetBtn.style.display = 'block';
+        }
+        
+        // After 3 minutes, auto-reset
+        if (elapsedTime > 180000) {
+          console.log('Detected stuck summarization task, cleaning up...');
+          
+          // Clear the stuck task
+          chrome.storage.local.remove('activeSummarizationTask');
+          
+          // Update UI to show error
+          const progressBar = document.getElementById('progress-bar');
+          const progressText = document.getElementById('progress-text');
+          const summary = document.getElementById('summary');
+          
+          if (progressBar) progressBar.style.width = '0%';
+          if (progressText) progressText.textContent = 'Process timed out';
+          if (summary) {
+            summary.textContent = 'The summarization process timed out. This might happen if:'
+              + '\n\n1. LM Studio is not running or crashed'
+              + '\n2. The model is taking too long to respond'
+              + '\n3. The content is too large for the model to process'
+              + '\n\nPlease try again with a smaller section of content or check LM Studio.';
+          }
+          
+          // Enable the summarize button again
+          const summarizeBtn = document.getElementById('summarize-btn');
+          if (summarizeBtn) summarizeBtn.disabled = false;
+          
+          // Hide the reset button
+          if (resetBtn) resetBtn.style.display = 'none';
+        }
+      } else {
+        // No active task, hide reset button
+        if (resetBtn) resetBtn.style.display = 'none';
+      }
+    });
+  }
+
+  // Immediately check for and clear any stuck tasks
+  chrome.storage.local.get(['activeSummarizationTask'], (result) => {
+    const task = result.activeSummarizationTask;
+    
+    if (task) {
+      // Check if the task is older than 2 minutes
+      const currentTime = Date.now();
+      const elapsedTime = currentTime - task.timestamp;
+      
+      if (elapsedTime > 120000) { // 2 minutes
+        console.log('Found a stuck task on popup open, cleaning up...');
+        chrome.storage.local.remove('activeSummarizationTask');
+        
+        // If we have progress elements already, update them
+        const progressBar = document.getElementById('progress-bar');
+        const progressText = document.getElementById('progress-text');
+        if (progressBar) progressBar.style.width = '0%';
+        if (progressText) progressText.textContent = 'Ready';
+      }
+    }
+  });
+
+  // Add a reset button to the popup.html
+  // Add this HTML to popup.html, near the progress bar:
+  // <button id="reset-btn" class="reset-button">Reset</button>
+
+  // Then add this to popup.js:
+  const resetBtn = document.getElementById('reset-btn');
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      // Force clear any active tasks
+      chrome.storage.local.remove('activeSummarizationTask');
+      
+      // Reset UI
+      if (progressBar) progressBar.style.width = '0%';
+      if (progressText) progressText.textContent = 'Ready';
+      summarizeBtn.disabled = false;
+      
+      // Update summary area
+      summaryContent.textContent = 'Summarization has been reset. You can try again.';
+      
+      console.log('Summarization process manually reset by user');
+    });
+  }
+
+  // Reduce the monitoring interval to check more frequently
+  setInterval(monitorSummarizationProgress, 15000); // Check every 15 seconds instead of every minute
 }); 

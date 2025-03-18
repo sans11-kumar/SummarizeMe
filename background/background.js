@@ -58,6 +58,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         // Decrypt API keys
         const apiKeys = await decryptApiKeys(result);
         
+        // Make sure we're using the decrypted keys
+        const groqApiKey = apiKeys.groqApiKey;
+        const openaiApiKey = apiKeys.openaiApiKey;
+        const deepseekApiKey = apiKeys.deepseekApiKey;
+        const customApiKey = apiKeys.customApiKey;
+        
+        // Log key status (without revealing the actual key)
+        console.log('Using Groq API key:', groqApiKey ? 'Key provided' : 'No key');
+        console.log('Using OpenAI API key:', openaiApiKey ? 'Key provided' : 'No key');
+        console.log('Using Deepseek API key:', deepseekApiKey ? 'Key provided' : 'No key');
+        console.log('Using Custom API key:', customApiKey ? 'Key provided' : 'No key');
+        
         const summarizerType = result.summarizerType || 'local';
         const localLlmUrl = result.localLlmUrl || 'http://localhost:1234/v1';
         
@@ -80,88 +92,138 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // Use the selected provider
           updateProgress(30, `Sending to ${getProviderName(summarizerType, result)}...`);
           
-          switch (summarizerType) {
-            case 'local':
-              summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-              break;
-            case 'groq':
-              summary = await summarizeWithGroq(title, formattedContent, apiKeys.groqApiKey, result.groqModel);
-              break;
-            case 'openai':
-              summary = await summarizeWithOpenAI(title, formattedContent, apiKeys.openaiApiKey, result.openaiModel);
-              break;
-            case 'deepseek':
-              summary = await summarizeWithDeepseek(title, formattedContent, apiKeys.deepseekApiKey, result.deepseekModel);
-              break;
-            case 'custom':
-              summary = await summarizeWithCustom(
-                title, 
-                formattedContent, 
-                apiKeys.customApiKey, 
-                result.customApiEndpoint,
-                result.customApiModel,
-                result.customApiHeaders
-              );
-              break;
-            default:
-              // Fallback to local LLM if invalid type
-              summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-          }
-          
-          updateProgress(90, 'Finalizing summary...');
-        } catch (apiError) {
-          console.error(`${summarizerType} error, falling back to Local LLM:`, apiError);
-          updateProgress(40, `${getProviderName(summarizerType, result)} failed, trying Local LLM...`);
-          
-          // Fallback to Local LLM
           try {
-            const { formattedContent } = formatContentForProvider(title, content, 'local');
-            summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
-            usedFallback = true;
-            provider = 'local';
+            switch (summarizerType) {
+              case 'local':
+                updateProgress(40, 'Processing with Local LLM...');
+                summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
+                updateProgress(80, 'Local LLM response received...');
+                break;
+              case 'groq':
+                summary = await summarizeWithGroq(title, formattedContent, groqApiKey, result.groqModel);
+                break;
+              case 'openai':
+                summary = await summarizeWithOpenAI(title, formattedContent, openaiApiKey, result.openaiModel);
+                break;
+              case 'deepseek':
+                summary = await summarizeWithDeepseek(title, formattedContent, deepseekApiKey, result.deepseekModel);
+                break;
+              case 'custom':
+                summary = await summarizeWithCustom(
+                  title, 
+                  formattedContent, 
+                  customApiKey, 
+                  result.customApiEndpoint,
+                  result.customApiModel,
+                  result.customApiHeaders
+                );
+                break;
+              default:
+                // Fallback to local LLM if invalid type
+                summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
+            }
+            
             updateProgress(90, 'Finalizing summary...');
-          } catch (localError) {
-            // If local also fails, rethrow the original error
-            updateProgress(0, 'All summarization methods failed');
-            throw apiError;
+          } catch (apiError) {
+            console.error(`${summarizerType} error, falling back to Local LLM:`, apiError);
+            updateProgress(40, `${getProviderName(summarizerType, result)} failed, trying Local LLM...`);
+            
+            // Only fallback if we weren't already using Local LLM
+            if (summarizerType !== 'local') {
+              // Fallback to Local LLM
+              try {
+                const { formattedContent } = formatContentForProvider(title, content, 'local');
+                updateProgress(50, 'Processing with Local LLM fallback...');
+                summary = await summarizeWithLocalLlm(title, formattedContent, localLlmUrl);
+                updateProgress(80, 'Local LLM response received...');
+                usedFallback = true;
+                provider = 'local';
+              } catch (localError) {
+                console.error('Local LLM fallback also failed:', localError);
+                updateProgress(0, 'All summarization methods failed');
+                // Explicitly clear the active task
+                chrome.storage.local.remove('activeSummarizationTask');
+                // Send error message to popup
+                chrome.runtime.sendMessage({
+                  action: 'summarizationComplete',
+                  data: {
+                    taskId,
+                    success: false,
+                    error: `Summarization failed: ${apiError.message}. Fallback also failed: ${localError.message}`
+                  }
+                });
+                return; // Exit the function
+              }
+            } else {
+              // If we're already using Local LLM and it failed, just report the error
+              updateProgress(0, 'Local LLM summarization failed');
+              // Explicitly clear the active task
+              chrome.storage.local.remove('activeSummarizationTask');
+              // Send error message to popup
+              chrome.runtime.sendMessage({
+                action: 'summarizationComplete',
+                data: {
+                  taskId,
+                  success: false,
+                  error: `Local LLM summarization failed: ${apiError.message}`
+                }
+              });
+              return; // Exit the function
+            }
           }
+          
+          // Save the summary and URL to history
+          saveToHistory(url, title, summary, provider);
+          updateProgress(100, 'Summary complete!');
+          
+          // Send the completed summary
+          chrome.runtime.sendMessage({
+            action: 'summarizationComplete',
+            data: { 
+              taskId,
+              success: true, 
+              summary,
+              usedFallback,
+              contentTruncated,
+              provider
+            }
+          });
+          
+          // Clear active task
+          chrome.storage.local.remove('activeSummarizationTask');
+        } catch (error) {
+          console.error('Summarization error:', error);
+          updateProgress(0, 'Summarization failed');
+          
+          // Explicitly clear the active task
+          chrome.storage.local.remove('activeSummarizationTask');
+          
+          // Send error message to popup
+          chrome.runtime.sendMessage({
+            action: 'summarizationComplete',
+            data: {
+              taskId,
+              success: false,
+              error: `Summarization failed: ${error.message}`
+            }
+          });
         }
-        
-        // Save the summary and URL to history
-        saveToHistory(url, title, summary, provider);
-        updateProgress(100, 'Summary complete!');
-        
-        // Send the completed summary
-        chrome.runtime.sendMessage({
-          action: 'summarizationComplete',
-          data: { 
-            taskId,
-            success: true, 
-            summary,
-            usedFallback,
-            contentTruncated,
-            provider
-          }
-        });
-        
-        // Clear active task
-        chrome.storage.local.remove('activeSummarizationTask');
       } catch (error) {
         console.error('Summarization error:', error);
         updateProgress(0, 'Summarization failed');
         
-        // Send error notification
+        // Explicitly clear the active task
+        chrome.storage.local.remove('activeSummarizationTask');
+        
+        // Send error message to popup
         chrome.runtime.sendMessage({
           action: 'summarizationComplete',
-          data: { 
+          data: {
             taskId,
-            success: false, 
-            error: error.message
+            success: false,
+            error: `Summarization failed: ${error.message}`
           }
         });
-        
-        // Clear active task
-        chrome.storage.local.remove('activeSummarizationTask');
       }
     });
     
@@ -182,23 +244,87 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   
   // Validate API connection
   if (message.action === 'validateApiConnection') {
-    const { provider, apiKey, model, endpoint, headers } = message.data;
+    const { provider } = message.data;
     
-    validateApiConnection(provider, apiKey, model, endpoint, headers)
-      .then(result => {
-        sendResponse(result);
-      })
-      .catch(error => {
-        console.error(`API validation error (${provider}):`, error);
-        sendResponse({ 
-          success: false, 
-          isValid: false, 
-          message: error.message 
+    // Get the API key for the specified provider
+    chrome.storage.sync.get([
+      'encryptedGroqApiKey',
+      'encryptedOpenaiApiKey',
+      'encryptedDeepseekApiKey',
+      'encryptedCustomApiKey',
+      'customApiEndpoint',
+      'customApiHeaders',
+      'encryptionEnabled'
+    ], async (result) => {
+      try {
+        console.log(`Validating ${provider} API keys`);
+        console.log('Encrypted key available:', !!result[`encrypted${provider.charAt(0).toUpperCase() + provider.slice(1)}ApiKey`]);
+        console.log('Encryption setting:', result.encryptionEnabled);
+        
+        // Decrypt the API keys
+        const apiKeys = await decryptApiKeys(result);
+        
+        // Log decrypted key status (without revealing the key)
+        console.log(`Decrypted ${provider} key available:`, !!apiKeys[`${provider}ApiKey`]);
+        console.log(`Decrypted ${provider} key length:`, apiKeys[`${provider}ApiKey`]?.length || 0);
+        
+        let apiKey, model, endpoint, headers;
+        
+        // Get the appropriate key based on provider
+        switch(provider) {
+          case 'groq':
+            apiKey = apiKeys.groqApiKey;
+            break;
+          case 'openai':
+            apiKey = apiKeys.openaiApiKey;
+            break;
+          case 'deepseek':
+            apiKey = apiKeys.deepseekApiKey;
+            break;
+          case 'custom':
+            apiKey = apiKeys.customApiKey;
+            endpoint = result.customApiEndpoint;
+            headers = result.customApiHeaders;
+            break;
+          default:
+            throw new Error(`Unknown provider: ${provider}`);
+        }
+        
+        // Check if API key exists
+        if (!apiKey) {
+          sendResponse({
+            success: true,
+            isValid: false,
+            message: 'API key is not configured'
+          });
+          return;
+        }
+        
+        // Log key length for debugging (don't log the actual key)
+        console.log(`API key length for ${provider}: ${apiKey.length}`);
+        console.log(`First 4 chars of key: ${apiKey.substring(0, 4)}...`);
+        
+        // Validate the API key
+        const validationResult = await validateApiConnection(
+          provider, 
+          apiKey, 
+          model, 
+          endpoint, 
+          headers
+        );
+        
+        sendResponse(validationResult);
+      } catch (error) {
+        console.error('Error validating API connection:', error);
+        sendResponse({
+          success: false,
+          isValid: false,
+          message: error.message
         });
-      });
+      }
+    });
     
-    // Return true to indicate we'll respond asynchronously
-    return true;
+    return true; // Keep the message channel open for the async response
   }
   
   // Check for active summarization
@@ -217,40 +343,84 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
     return true;
   }
+
+  // Add this to your message listener in background.js
+  if (message.action === 'resetSummarization') {
+    console.log('Manual reset requested');
+    chrome.storage.local.remove('activeSummarizationTask', () => {
+      sendResponse({ success: true });
+    });
+    return true; // Keep the message channel open for async response
+  }
 });
 
 // Format content based on provider's token limits
 function formatContentForProvider(title, content, provider, settings = {}) {
-  // Default token limits by provider
-  const tokenLimits = {
-    'local': 8000,    // LM Studio with smaller models
-    'groq': 4000,     // Groq has 6000 TPM limit
-    'openai': 12000,  // GPT-3.5 has 16K, adjust based on model
-    'deepseek': 6000, // Deepseek Chat
-    'custom': 6000    // Default for custom providers
-  };
-  
-  // Adjust based on specific models if needed
-  if (provider === 'openai' && settings.openaiModel === 'gpt-4') {
-    tokenLimits.openai = 6000; // GPT-4 has an 8K context
-  } else if (provider === 'openai' && settings.openaiModel === 'gpt-4-turbo') {
-    tokenLimits.openai = 100000; // GPT-4 Turbo has a 128K context
+  // Set reasonable token limits based on provider
+  let tokenLimit;
+  switch (provider) {
+    case 'local':
+      tokenLimit = 8000; // Conservative limit for local models
+      break;
+    case 'groq':
+      tokenLimit = settings.groqModel && settings.groqModel.includes('70b') ? 12000 : 8000;
+      break;
+    case 'openai':
+      tokenLimit = settings.openaiModel && settings.openaiModel.includes('gpt-4') ? 12000 : 4000;
+      break;
+    case 'deepseek':
+      tokenLimit = 8000;
+      break;
+    case 'custom':
+      tokenLimit = 4000; // Conservative default
+      break;
+    default:
+      tokenLimit = 4000;
   }
   
-  // Estimate the current tokens (roughly 4 chars per token)
+  // Estimate tokens (rough approximation: 4 chars ~= 1 token)
   const estimatedTokens = Math.ceil((title.length + content.length) / 4);
   
-  // Check if content needs truncation
-  if (estimatedTokens <= tokenLimits[provider]) {
-    return { formattedContent: content, isTruncated: false };
+  // Log the content size for debugging
+  console.log(`Content for ${provider} - estimated tokens: ${estimatedTokens}, limit: ${tokenLimit}`);
+  
+  // If content is within limit, return as is
+  if (estimatedTokens <= tokenLimit) {
+    return { 
+      formattedContent: content,
+      isTruncated: false
+    };
   }
   
-  // Truncate content to fit within token limit
-  const maxContentChars = tokenLimits[provider] * 4 - title.length - 200; // Buffer for prompt
-  const truncatedContent = content.substring(0, maxContentChars) + 
-    "\n\n[Content truncated due to length limits. This summary covers only the beginning portion of the content.]";
+  // If we need to truncate, do it more intelligently
+  console.log(`Content exceeds ${provider} token limit, truncating...`);
+  
+  // Keep title and first few paragraphs intact
+  const paragraphs = content.split('\n\n');
+  
+  // Always keep the first paragraph (intro)
+  let truncatedContent = paragraphs[0] + '\n\n';
+  let currentTokens = Math.ceil((title.length + truncatedContent.length) / 4);
+  
+  // Add as many paragraphs as will fit
+  for (let i = 1; i < paragraphs.length; i++) {
+    const paragraphTokens = Math.ceil(paragraphs[i].length / 4);
     
-  return { formattedContent: truncatedContent, isTruncated: true };
+    // If this paragraph would exceed our limit, stop adding
+    if (currentTokens + paragraphTokens > tokenLimit * 0.9) {
+      truncatedContent += '\n\n[Content truncated due to length limitations...]';
+      break;
+    }
+    
+    // Otherwise add the paragraph
+    truncatedContent += paragraphs[i] + '\n\n';
+    currentTokens += paragraphTokens;
+  }
+  
+  return {
+    formattedContent: truncatedContent,
+    isTruncated: true
+  };
 }
 
 // Get human-readable provider name
@@ -280,11 +450,16 @@ async function decryptApiKeys(settings) {
     if (!encryptedData) return '';
     
     try {
-      // Try simple base64 decode first (no encryption)
-      if (!settings.encryptionEnabled) {
+      // Check if encryption is enabled
+      const encryptionEnabled = settings.encryptionEnabled !== undefined ? 
+        settings.encryptionEnabled : true;
+      
+      // Try simple base64 decode if encryption is disabled
+      if (!encryptionEnabled) {
         return atob(encryptedData);
       }
       
+      // For encrypted data:
       // Convert base64 to array buffer
       const encryptedBytes = Uint8Array.from(atob(encryptedData), c => c.charCodeAt(0));
       
@@ -472,204 +647,129 @@ If you can't answer based on the summary, say so and suggest what information mi
 
 // Validate API Connection
 async function validateApiConnection(provider, apiKey, model, endpoint, headers) {
-  if (!apiKey) {
-    return { success: false, isValid: false, message: 'No API key provided' };
-  }
-  
   try {
-    switch (provider) {
+    console.log(`Validating ${provider} API connection`);
+    
+    // Check if API key is provided
+    if (!apiKey) {
+      console.log(`No API key provided for ${provider}`);
+      return {
+        success: true,
+        isValid: false,
+        message: 'API key is not configured'
+      };
+    }
+    
+    // Log key length for debugging (don't log the actual key)
+    console.log(`API key length for ${provider}: ${apiKey.length}`);
+    console.log(`First 4 chars of key: ${apiKey.substring(0, 4)}...`);
+    
+    // Add timeout to prevent hanging requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 15000); // 15 second timeout
+    
+    let url, requestHeaders;
+    
+    // Configure request based on provider
+    switch(provider) {
       case 'groq':
-        return await validateGroqApiKey(apiKey);
-      
+        url = 'https://api.groq.com/openai/v1/models';
+        requestHeaders = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
+        break;
       case 'openai':
-        return await validateOpenAIApiKey(apiKey);
-        
+        url = 'https://api.openai.com/v1/models';
+        requestHeaders = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
+        break;
       case 'deepseek':
-        return await validateDeepseekApiKey(apiKey);
-        
+        url = 'https://api.deepseek.com/v1/models';  // Adjust if needed
+        requestHeaders = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
+        break;
       case 'custom':
-        return await validateCustomApiKey(apiKey, endpoint, headers);
+        if (!endpoint) {
+          throw new Error('Custom API endpoint not configured');
+        }
+        url = endpoint.endsWith('/models') ? endpoint : 
+              (endpoint.endsWith('/') ? endpoint + 'models' : endpoint + '/models');
+        requestHeaders = {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json'
+        };
         
+        // Add custom headers if provided
+        if (headers) {
+          try {
+            const parsedHeaders = typeof headers === 'string' ? JSON.parse(headers) : headers;
+            requestHeaders = { ...requestHeaders, ...parsedHeaders };
+          } catch (e) {
+            console.error('Error parsing custom headers:', e);
+          }
+        }
+        break;
       default:
-        return { success: false, isValid: false, message: 'Unknown provider' };
+        throw new Error(`Unknown provider: ${provider}`);
     }
-  } catch (error) {
-    console.error(`API validation error (${provider}):`, error);
-    return { 
-      success: false, 
-      isValid: false, 
-      message: error.message || 'Connection error' 
-    };
-  }
-}
-
-// Function to validate Groq API key
-async function validateGroqApiKey(apiKey) {
-  if (!apiKey) {
-    return { success: false, isValid: false, message: 'No API key provided' };
-  }
-  
-  try {
-    // Make a simple request to Groq API to check if the key is valid
-    // Using the models endpoint as it's lightweight
-    const response = await fetch('https://api.groq.com/openai/v1/models', {
+    
+    // Debug output
+    console.log(`Sending request to ${url}`);
+    
+    const response = await fetch(url, {
       method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`
-      }
+      headers: requestHeaders,
+      signal: controller.signal
     });
     
-    // Check the response
-    if (response.ok) {
-      return { success: true, isValid: true };
-    } else {
-      const errorData = await response.json();
-      return { 
-        success: false, 
-        isValid: false, 
-        message: errorData.error?.message || 'Invalid API key' 
+    clearTimeout(timeoutId);
+    
+    // Check if response is OK before trying to parse JSON
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`${provider} API error response:`, errorText);
+      return {
+        success: true,
+        isValid: false,
+        message: `API returned status ${response.status}: ${errorText.substring(0, 100)}`
       };
     }
-  } catch (error) {
-    console.error('Groq API validation error:', error);
-    return { 
-      success: false, 
-      isValid: false, 
-      message: error.message || 'Connection error'
-    };
-  }
-}
-
-// Function to validate OpenAI API key
-async function validateOpenAIApiKey(apiKey) {
-  if (!apiKey) {
-    return { success: false, isValid: false, message: 'No API key provided' };
-  }
-  
-  try {
-    // Make a simple request to OpenAI API to check if the key is valid
-    const response = await fetch('https://api.openai.com/v1/models', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`
-      }
-    });
     
-    // Check the response
-    if (response.ok) {
-      return { success: true, isValid: true };
-    } else {
-      const errorData = await response.json();
-      return { 
-        success: false, 
-        isValid: false, 
-        message: errorData.error?.message || 'Invalid API key' 
+    const data = await response.json();
+    console.log(`${provider} API validation successful`);
+    
+    return {
+      success: true,
+      isValid: true,
+      message: 'API key is valid'
+    };
+  } catch (error) {
+    console.error(`${provider} API validation error:`, error);
+    
+    // Check for timeout
+    if (error.name === 'AbortError') {
+      return {
+        success: true,
+        isValid: false,
+        message: 'Connection timed out'
       };
     }
-  } catch (error) {
-    console.error('OpenAI API validation error:', error);
-    return { 
-      success: false, 
-      isValid: false, 
-      message: error.message || 'Connection error'
-    };
-  }
-}
-
-// Function to validate Deepseek API key
-async function validateDeepseekApiKey(apiKey) {
-  if (!apiKey) {
-    return { success: false, isValid: false, message: 'No API key provided' };
-  }
-  
-  try {
-    // Make a simple request to Deepseek API to check if the key is valid
-    const response = await fetch('https://api.deepseek.com/v1/models', {
-      method: 'GET',
-      headers: {
-        'Authorization': `Bearer ${apiKey}`
-      }
-    });
     
-    // Check the response
-    if (response.ok) {
-      return { success: true, isValid: true };
-    } else {
-      const errorData = await response.json();
-      return { 
-        success: false, 
-        isValid: false, 
-        message: errorData.error?.message || 'Invalid API key' 
-      };
-    }
-  } catch (error) {
-    console.error('Deepseek API validation error:', error);
-    return { 
-      success: false, 
-      isValid: false, 
-      message: error.message || 'Connection error'
-    };
-  }
-}
-
-// Function to validate Custom API key
-async function validateCustomApiKey(apiKey, endpoint, customHeaders = {}) {
-  if (!apiKey) {
-    return { success: false, isValid: false, message: 'No API key provided' };
-  }
-  
-  if (!endpoint) {
-    return { success: false, isValid: false, message: 'No API endpoint provided' };
-  }
-  
-  try {
-    // Parse the headers if it's a string
-    let headers = typeof customHeaders === 'string' 
-      ? JSON.parse(customHeaders || '{}') 
-      : customHeaders;
-    
-    // Add authorization header
-    headers = {
-      ...headers,
-      'Authorization': `Bearer ${apiKey}`
-    };
-    
-    // Make a request to the endpoint
-    const response = await fetch(endpoint, {
-      method: 'GET',
-      headers
-    });
-    
-    // Check if we got any response
-    if (response.ok) {
-      return { success: true, isValid: true };
-    } else {
-      let message = 'Invalid API key or endpoint';
-      try {
-        const errorData = await response.json();
-        message = errorData.error?.message || message;
-      } catch (e) {
-        // Ignore JSON parse errors
-      }
-      
-      return { 
-        success: false, 
-        isValid: false, 
-        message
-      };
-    }
-  } catch (error) {
-    console.error('Custom API validation error:', error);
-    return { 
-      success: false, 
-      isValid: false, 
-      message: error.message || 'Connection error'
+    return {
+      success: true,
+      isValid: false,
+      message: error.message
     };
   }
 }
 
 // Function to chat using Groq API
-async function chatWithGroq(messages, apiKey, model = 'llama3-8b-8192') {
+async function chatWithGroq(messages, apiKey, model) {
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
@@ -678,8 +778,9 @@ async function chatWithGroq(messages, apiKey, model = 'llama3-8b-8192') {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'llama3-8b-8192', // Fallback only if model is undefined
         messages: messages,
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -698,7 +799,7 @@ async function chatWithGroq(messages, apiKey, model = 'llama3-8b-8192') {
 }
 
 // Function to chat using OpenAI API
-async function chatWithOpenAI(messages, apiKey, model = 'gpt-3.5-turbo') {
+async function chatWithOpenAI(messages, apiKey, model) {
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
@@ -707,8 +808,9 @@ async function chatWithOpenAI(messages, apiKey, model = 'gpt-3.5-turbo') {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'gpt-3.5-turbo', // Fallback only if model is undefined
         messages: messages,
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -727,7 +829,7 @@ async function chatWithOpenAI(messages, apiKey, model = 'gpt-3.5-turbo') {
 }
 
 // Function to chat using Deepseek API
-async function chatWithDeepseek(messages, apiKey, model = 'deepseek-chat') {
+async function chatWithDeepseek(messages, apiKey, model) {
   try {
     const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
       method: 'POST',
@@ -736,8 +838,9 @@ async function chatWithDeepseek(messages, apiKey, model = 'deepseek-chat') {
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'deepseek-chat', // Fallback only if model is undefined
         messages: messages,
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -776,6 +879,7 @@ async function chatWithCustom(messages, apiKey, endpoint, model, customHeaders =
       body: JSON.stringify({
         model: model,
         messages: messages,
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -802,39 +906,193 @@ async function chatWithCustom(messages, apiKey, endpoint, model, customHeaders =
   }
 }
 
-// Function to chat using local LLM via LM Studio
+// Fixed function to chat using local LLM via LM Studio with better timeout handling
 async function chatWithLocalLlm(messages, localLlmUrl) {
   try {
-    const response = await fetch(`${localLlmUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'deepseek-r1-distill-qwen-7b',
-        messages: messages,
-        max_tokens: 500
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'Error calling local LLM');
+    // Ensure localLlmUrl is a string and properly formatted
+    if (!localLlmUrl || typeof localLlmUrl !== 'string') {
+      localLlmUrl = 'http://localhost:1234/v1';
     }
     
-    return data.choices[0].message.content;
+    // Ensure localLlmUrl doesn't end with /v1
+    const baseUrl = localLlmUrl.endsWith('/v1') 
+      ? localLlmUrl 
+      : localLlmUrl.endsWith('/') 
+        ? localLlmUrl + 'v1' 
+        : localLlmUrl + '/v1';
+    
+    console.log(`Connecting to local LLM chat at ${baseUrl}/chat/completions`);
+    
+    // Create a controller with a much longer timeout (3 minutes)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log('Local LLM chat request timed out after 3 minutes');
+      controller.abort();
+    }, 180000); // 3 minutes timeout
+    
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'keep-alive' // Add keep-alive header
+        },
+        body: JSON.stringify({
+          model: "any-model", // This field is ignored by LM Studio if only one model is loaded
+          messages: messages,
+          max_tokens: 500,
+          temperature: 0.7,
+          stream: false // Explicitly set stream to false
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`LM Studio chat error (${response.status}):`, errorText);
+        throw new Error(`HTTP error ${response.status}: ${errorText.substring(0, 100)}`);
+      }
+      
+      const data = await response.json();
+      console.log('LM Studio chat response data:', data);
+      
+      if (!data.choices || data.choices.length === 0) {
+        throw new Error('No completion choices returned from LM Studio');
+      }
+      
+      return data.choices[0].message.content.trim();
+    } finally {
+      clearTimeout(timeoutId); // Ensure timeout is cleared
+    }
   } catch (error) {
     console.error('Local LLM chat error:', error);
-    throw new Error(`Failed to get answer with local LLM: ${error.message}. Make sure LM Studio is running.`);
+    
+    if (error.name === 'AbortError') {
+      throw new Error('Local LLM request timed out. The model might be taking too long to generate a response.');
+    }
+    
+    throw new Error(`Failed to chat with local LLM: ${error.message}. Make sure LM Studio is running with the correct model loaded.`);
+  }
+}
+
+// Function to summarize content using local LLM via LM Studio with longer timeout
+async function summarizeWithLocalLlm(title, content, localLlmUrl) {
+  const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
+  
+  try {
+    // Ensure localLlmUrl is a string and properly formatted
+    if (!localLlmUrl || typeof localLlmUrl !== 'string') {
+      localLlmUrl = 'http://localhost:1234/v1';
+    }
+    
+    // Ensure localLlmUrl doesn't end with /v1
+    const baseUrl = localLlmUrl.endsWith('/v1') 
+      ? localLlmUrl 
+      : localLlmUrl.endsWith('/') 
+        ? localLlmUrl + 'v1' 
+        : localLlmUrl + '/v1';
+    
+    console.log(`Connecting to local LLM at ${baseUrl}/chat/completions`);
+    
+    // Create a controller with a much longer timeout (3 minutes)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      console.log('Local LLM request timed out after 3 minutes');
+      controller.abort();
+    }, 180000); // 3 minutes timeout
+    
+    try {
+      // First, perform a quick models check to ensure server is running
+      try {
+        const modelCheckResponse = await fetch(`${baseUrl}/models`, {
+          method: 'GET',
+          headers: {
+            'Connection': 'keep-alive'
+          },
+          signal: AbortSignal.timeout(5000) // Quick 5-second timeout for this check
+        });
+        
+        if (!modelCheckResponse.ok) {
+          throw new Error(`LM Studio server returned status ${modelCheckResponse.status}`);
+        }
+        
+        console.log('LM Studio server is running, proceeding with completion request');
+      } catch (modelCheckError) {
+        console.error('LM Studio server check failed:', modelCheckError);
+        throw new Error('Cannot connect to LM Studio server. Is it running?');
+      }
+      
+      // Now proceed with the actual completion request
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Connection': 'keep-alive' // Add keep-alive header
+        },
+        body: JSON.stringify({
+          model: "any-model", // This field is ignored by LM Studio if only one model is loaded
+          messages: [
+            { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
+            { role: 'user', content: prompt }
+          ],
+          max_tokens: 500,
+          temperature: 0.7,
+          stream: false // Explicitly set stream to false
+        }),
+        signal: controller.signal
+      });
+      
+      clearTimeout(timeoutId);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`LM Studio error (${response.status}):`, errorText);
+        throw new Error(`HTTP error ${response.status}: ${errorText.substring(0, 100)}`);
+      }
+      
+      const data = await response.json();
+      console.log('LM Studio response data:', data);
+      
+      if (!data.choices || data.choices.length === 0) {
+        throw new Error('No completion choices returned from LM Studio');
+      }
+      
+      return data.choices[0].message.content.trim();
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
+    }
+  } catch (error) {
+    console.error('Local LLM summarization error:', error);
+    
+    if (error.name === 'AbortError') {
+      throw new Error('Local LLM request timed out. The model might be taking too long to generate a response.');
+    }
+    
+    throw new Error(`Failed to summarize with local LLM: ${error.message}. Make sure LM Studio is running with the correct model loaded.`);
   }
 }
 
 // Function to summarize content using Groq API
-async function summarizeWithGroq(title, content, apiKey, model = 'llama3-8b-8192') {
+async function summarizeWithGroq(title, content, apiKey, model) {
   const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
   
   try {
+    console.log(`Calling Groq API with model: ${model}`);
+    
+    // Add timeout to prevent hanging requests
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30 second timeout
+    
+    // Verify API key is present
+    if (!apiKey) {
+      throw new Error('Groq API key is missing. Please check your settings.');
+    }
+    
+    console.log('Using model:', model);
+    
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -842,19 +1100,37 @@ async function summarizeWithGroq(title, content, apiKey, model = 'llama3-8b-8192
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'llama3-8b-8192', // Fallback only if model is undefined
         messages: [
           { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
           { role: 'user', content: prompt }
         ],
+        temperature: 0.7,
         max_tokens: 500
-      })
+      }),
+      signal: controller.signal
     });
+    
+    clearTimeout(timeoutId);
+    
+    // Check if response is OK before trying to parse JSON
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Groq API error response:', errorText);
+      
+      // Add specific handling for 401 errors
+      if (response.status === 401) {
+        throw new Error('Invalid Groq API key. Please check your settings and update your API key.');
+      }
+      
+      throw new Error(`Groq API returned status ${response.status}: ${errorText.substring(0, 100)}`);
+    }
     
     const data = await response.json();
     
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'Error calling Groq API');
+    if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+      console.error('Unexpected Groq API response format:', data);
+      throw new Error('Unexpected response format from Groq API');
     }
     
     return data.choices[0].message.content;
@@ -865,7 +1141,7 @@ async function summarizeWithGroq(title, content, apiKey, model = 'llama3-8b-8192
 }
 
 // Function to summarize content using OpenAI API
-async function summarizeWithOpenAI(title, content, apiKey, model = 'gpt-3.5-turbo') {
+async function summarizeWithOpenAI(title, content, apiKey, model) {
   const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
   
   try {
@@ -876,11 +1152,12 @@ async function summarizeWithOpenAI(title, content, apiKey, model = 'gpt-3.5-turb
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'gpt-3.5-turbo', // Fallback only if model is undefined
         messages: [
           { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
           { role: 'user', content: prompt }
         ],
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -899,7 +1176,7 @@ async function summarizeWithOpenAI(title, content, apiKey, model = 'gpt-3.5-turb
 }
 
 // Function to summarize content using Deepseek API
-async function summarizeWithDeepseek(title, content, apiKey, model = 'deepseek-chat') {
+async function summarizeWithDeepseek(title, content, apiKey, model) {
   const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
   
   try {
@@ -910,11 +1187,12 @@ async function summarizeWithDeepseek(title, content, apiKey, model = 'deepseek-c
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model,
+        model: model || 'deepseek-chat', // Fallback only if model is undefined
         messages: [
           { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
           { role: 'user', content: prompt }
         ],
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -958,6 +1236,7 @@ async function summarizeWithCustom(title, content, apiKey, endpoint, model, cust
           { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
           { role: 'user', content: prompt }
         ],
+        temperature: 0.7,
         max_tokens: 500
       })
     });
@@ -981,39 +1260,6 @@ async function summarizeWithCustom(title, content, apiKey, endpoint, model, cust
   } catch (error) {
     console.error('Custom API error:', error);
     throw new Error(`Failed to summarize with Custom API: ${error.message}`);
-  }
-}
-
-// Function to summarize content using local LLM via LM Studio
-async function summarizeWithLocalLlm(title, content, localLlmUrl) {
-  const prompt = `Summarize the following content with title "${title}":\n\n${content}\n\nProvide a concise summary highlighting the key points.`;
-  
-  try {
-    const response = await fetch(`${localLlmUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: 'deepseek-r1-distill-qwen-7b',
-        messages: [
-          { role: 'system', content: 'You are a helpful assistant that provides concise summaries of web content.' },
-          { role: 'user', content: prompt }
-        ],
-        max_tokens: 500
-      })
-    });
-    
-    const data = await response.json();
-    
-    if (!response.ok) {
-      throw new Error(data.error?.message || 'Error calling local LLM');
-    }
-    
-    return data.choices[0].message.content;
-  } catch (error) {
-    console.error('Local LLM error:', error);
-    throw new Error(`Failed to summarize with local LLM: ${error.message}. Make sure LM Studio is running.`);
   }
 }
 

@@ -9,6 +9,7 @@ A Chrome extension that allows you to summarize web content and ask follow-up qu
 - Generate concise summaries using AI
 - Interactive chat interface to ask follow-up questions
 - Multiple LLM provider options with smart fallback
+- Flexible model selection for each provider
 - Secure, encrypted storage for API keys
 - Progress tracking during summarization
 - Content length optimization for each provider
@@ -41,12 +42,13 @@ A Chrome extension that allows you to summarize web content and ask follow-up qu
 ### Local LLM (No API Key Required)
 
 1. Download and install [LM Studio](https://lmstudio.ai/)
-2. Open LM Studio and download the `deepseek-r1-distill-qwen-7b` model
+2. Open LM Studio and download your preferred model (e.g., `deepseek-r1-distill-qwen-7b`)
 3. Start the local server in LM Studio (it should run on http://localhost:1234 by default)
 4. Click the extension icon and go to Settings
 5. Select "Local LLM" as the summarization method
 6. Enter the local API URL (default: http://localhost:1234/v1)
-7. Save settings
+7. Enter the exact model name as it appears in LM Studio
+8. Save settings
 
 ### Groq API
 
@@ -86,7 +88,7 @@ A Chrome extension that allows you to summarize web content and ask follow-up qu
 4. Enter a name for your provider
 5. Enter the API endpoint URL
 6. Enter your API key
-7. Specify the model name
+7. Specify the model name exactly as required by your provider
 8. Add any additional headers if required (in JSON format)
 9. Click "Test Connection" to verify your settings
 10. Save settings
@@ -99,6 +101,15 @@ A Chrome extension that allows you to summarize web content and ask follow-up qu
 4. Watch the progress bar as content is extracted and processed
 5. The summary will appear in the extension popup
 6. Use the chat interface below the summary to ask follow-up questions about the content
+
+## Model Selection
+
+The extension uses a flexible approach to model selection:
+
+1. **User-defined models**: All LLM providers allow you to select specific models in settings
+2. **Dynamic retrieval**: The extension dynamically retrieves your model preference at runtime
+3. **Fallback models**: If no model is specified, sensible defaults are used as fallbacks
+4. **Model-specific optimization**: Content length is automatically optimized for each model
 
 ## Security Features
 
@@ -123,9 +134,10 @@ If the extension doesn't work properly, check the following:
 1. **Icons are missing**: Make sure you've created the icon files in the `icons` directory
 2. **Local LLM not working**: Ensure LM Studio is running with the local server enabled
 3. **API keys invalid**: Check that your API keys are correct and have the necessary permissions
-4. **Content scraping issues**: Some websites may have complex layouts that are difficult to scrape
-5. **Token limits**: Very long pages will be automatically truncated
-6. **Chrome Developer console**: Check for any errors in the console by right-clicking the extension popup and selecting "Inspect"
+4. **Model names incorrect**: Verify that model names match exactly what the provider expects
+5. **Content scraping issues**: Some websites may have complex layouts that are difficult to scrape
+6. **Token limits**: Very long pages will be automatically truncated
+7. **Chrome Developer console**: Check for any errors in the console by right-clicking the extension popup and selecting "Inspect"
 
 ## Project Structure
 
@@ -157,6 +169,7 @@ summarize-me/
 - Long pages will be truncated based on the token limits of the selected provider
 - Some pages with complex layouts may not be scraped correctly
 - API providers may have rate limits or costs associated with their use
+- Model availability may change as providers update their offerings
 
 ## Tools Used
 
@@ -164,3 +177,27 @@ summarize-me/
 - LM Studio for local LLM inference
 - Web Crypto API for secure encryption
 - Various LLM APIs (Groq, OpenAI, Deepseek, etc.)
+
+### Tips for Using LM Studio
+
+1. **Model Selection**: 
+   - Choose smaller models for faster responses (7B or smaller)
+   - Models like Phi-2, Mistral 7B, or Llama2 7B offer good performance
+   - Avoid using larger models (>13B) unless you have a powerful GPU
+
+2. **Performance Settings**:
+   - In LM Studio, click on "Settings" next to the local server
+   - Set "Threads" to match your CPU core count (or slightly less)
+   - Enable "Low VRAM" if you have limited GPU memory
+   - Lower "Context Length" to 2048 if you're experiencing slow responses
+
+3. **Timeout Issues**:
+   - If you're getting client disconnected errors, try summarizing shorter content
+   - The extension now waits up to 3 minutes for a response
+   - For very long documents, consider using a cloud API like Groq instead
+
+4. **Troubleshooting**:
+   - Check LM Studio logs for specific errors
+   - Restart LM Studio if you encounter persistent issues
+   - Make sure only one instance of LM Studio is running
+   - Try a different model if summarization is failing
